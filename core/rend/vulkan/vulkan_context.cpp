@@ -22,6 +22,7 @@
 #include "vulkan_renderer.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "stdclass.h"
 #include "ui/gui.h"
 #ifdef USE_SDL
 #include <sdl/sdl.h>
@@ -467,9 +468,28 @@ bool VulkanContext::InitDevice()
 		{
 			// Enable VK_EXT_provoking_vertex if available
 			provokingVertexSupported = tryAddDeviceExtension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+
+			// Enable VK_EXT_external_memory_host if available
+			externalMemoryHostSupported = tryAddDeviceExtension(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
 		}
 		
 		// Get device features
+		const auto addPointerToChain = [](void* head, const void* ptr) -> void
+		{
+			vk::BaseInStructure* prevInStructure = static_cast<vk::BaseInStructure*>(head);
+			while (prevInStructure->pNext)
+			{
+				// Structure already in chain
+				if (prevInStructure->pNext == ptr)
+				{
+					return;
+				}
+				prevInStructure = const_cast<vk::BaseInStructure*>(prevInStructure->pNext);
+			}
+
+			// Add structure to end
+			prevInStructure->pNext = static_cast<const vk::BaseInStructure*>(ptr);
+		};
 
 		vk::PhysicalDeviceFeatures2 featuresChain{};
 		vk::PhysicalDeviceFeatures& features = featuresChain.features;
@@ -477,7 +497,7 @@ bool VulkanContext::InitDevice()
 		vk::PhysicalDeviceProvokingVertexFeaturesEXT provokingVertexFeatures{};
 		if (provokingVertexSupported)
 		{
-			featuresChain.pNext = &provokingVertexFeatures;
+			addPointerToChain(&featuresChain, &provokingVertexFeatures);
 		}
 		
 		// Get the physical device's features
@@ -576,7 +596,33 @@ bool VulkanContext::InitDevice()
 	    quadRotatePipeline = std::make_unique<QuadPipeline>(true, true);
 	    quadRotateDrawer = std::make_unique<QuadDrawer>();
 
-		vk::PhysicalDeviceProperties props = physicalDevice.getProperties();
+
+		vk::PhysicalDeviceProperties2 properties2;
+		vk::PhysicalDeviceProperties& props = properties2.properties;
+
+		vk::PhysicalDeviceExternalMemoryHostPropertiesEXT externalMemoryHostProperties{};
+		if (externalMemoryHostSupported)
+		{
+			addPointerToChain(&properties2, &externalMemoryHostProperties);
+		}
+
+		if (getPhysicalDeviceProperties2Supported && properties2.pNext)
+		{
+			physicalDevice.getProperties2(&properties2);
+		}
+		else
+		{
+			props = physicalDevice.getProperties();
+		}
+
+		if (externalMemoryHostSupported)
+		{
+			// Only allow usage of VK_EXT_external_memory_host if the imported alignment
+			// is the same as the system's page size(any pointer can be imported)
+			externalMemoryHostSupported &= (externalMemoryHostProperties.minImportedHostPointerAlignment == PAGE_SIZE);
+		}
+
+
 		driverName = (const char *)props.deviceName;
 #ifdef __APPLE__
 		driverVersion = std::to_string(VK_API_VERSION_MAJOR(props.apiVersion)) + "."
@@ -1455,18 +1501,18 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 	}
 	else
 	{
-		data.reserve(width * height * 3);
+	data.reserve(width * height * 3);
 		// RGBA -> RGB
-		for (int y = 0; y < height; y++)
+	for (int y = 0; y < height; y++)
+	{
+		for (int x = 0; x < width; x++)
 		{
-			for (int x = 0; x < width; x++)
-			{
-				data.push_back(*img++);
-				data.push_back(*img++);
-				data.push_back(*img++);
-				img++;
-			}
+			data.push_back(*img++);
+			data.push_back(*img++);
+			data.push_back(*img++);
+			img++;
 		}
+	}
 	}
 	attachment.GetBufferData()->UnmapMemory();
 

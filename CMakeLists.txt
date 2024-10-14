@@ -30,7 +30,7 @@ else()
 	project(flycast)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NINTENDO_SWITCH)
 	set(CMAKE_CXX_EXTENSIONS ON)
@@ -233,7 +233,7 @@ else()
 	add_executable(${PROJECT_NAME} core/emulator.cpp)
 endif()
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
+set_target_properties(${PROJECT_NAME} PROPERTIES 
 		CMAKE_CXX_STANDARD 20
 		CMAKE_CXX_STANDARD_REQUIRED ON)
 

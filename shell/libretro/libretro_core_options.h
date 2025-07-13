@@ -261,6 +261,23 @@ struct retro_core_option_v2_definition option_defs_us[] = {
    },
 
    {
+      CORE_OPTION_NAME "_renderer",
+      "Renderer (Restart Required)",
+      NULL,
+      "Select the graphics API. Changing this requires a core restart.",
+      NULL,
+      "video",
+      {
+         { "Vulkan", "Vulkan (default)" },
+         { "OpenGL", "OpenGL" },
+#if defined(HAVE_METAL)
+         { "Metal",  "Metal (Experimental)" },
+#endif
+         { NULL, NULL },
+      },
+      "Vulkan",
+   },
+   {
       CORE_OPTION_NAME "_internal_resolution",
       "Internal Resolution",
       NULL,

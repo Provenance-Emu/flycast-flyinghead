@@ -64,6 +64,7 @@ option(USE_OPENMP "Use OpenMP if available" ON)
 option(USE_VULKAN "Build with Vulkan support" ON)
 option(USE_DX9 "Build with Direct3D 9 support" ON)
 option(USE_DX11 "Build with Direct3D 11 support" ON)
+option(USE_METAL "Build with Metal support" ON)
 option(LIBRETRO "Build libretro core" OFF)
 option(USE_OPENGL "Use OpenGL API" ON)
 option(USE_VIDEOCORE "RPI: use the legacy Broadcom GLES libraries" OFF)
@@ -81,6 +82,11 @@ option(USE_LIBCDIO "Use libcdio for CDROM access" OFF)
 
 if(IOS AND NOT LIBRETRO)
 	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
+endif()
+
+# Enable Metal only on Apple platforms
+if(NOT APPLE)
+	set(USE_METAL OFF CACHE BOOL "Force Metal off on non-Apple platforms" FORCE)
 endif()
 
 include(GNUInstallDirs)
@@ -861,6 +867,9 @@ if(LIBRETRO)
 		shell/libretro/option.cpp
 		shell/libretro/oslib.cpp
 		shell/libretro/vmu_xhair.cpp)
+	if(USE_METAL)
+		target_sources(${PROJECT_NAME} PRIVATE shell/libretro/metal_context_wrapper.mm)
+	endif()
 	if(APPLE)
 		target_sources(${PROJECT_NAME} PRIVATE shell/libretro/oslib_apple.mm)
 	endif()
@@ -1544,6 +1553,48 @@ if(WIN32 AND USE_DX11)
 
 	target_compile_definitions(${PROJECT_NAME} PRIVATE HAVE_D3D11)
 	target_link_libraries(${PROJECT_NAME} PRIVATE d3d11 d3dcompiler dxgi)
+endif()
+
+if(APPLE AND USE_METAL)
+	if(NOT LIBRETRO)
+		target_sources(${PROJECT_NAME} PRIVATE
+			core/deps/imgui/backends/imgui_impl_metal.h
+			core/deps/imgui/backends/imgui_impl_metal.mm)
+	endif()
+	target_sources(${PROJECT_NAME} PRIVATE
+		core/rend/metal/metal.h
+		core/rend/metal/metal_buffer.h
+		core/rend/metal/metal_buffer.mm
+		core/rend/metal/metal_commandpool.h
+		core/rend/metal/metal_commandpool.mm
+		core/rend/metal/metal_context.h
+		core/rend/metal/metal_context.mm
+		core/rend/metal/metal_drawer.h
+		core/rend/metal/metal_drawer.mm
+		core/rend/metal/metal_driver.h
+		core/rend/metal/metal_pipeline.h
+		core/rend/metal/metal_pipeline.mm
+		core/rend/metal/metal_quad.h
+		core/rend/metal/metal_quad.mm
+		core/rend/metal/metal_renderer.h
+		core/rend/metal/metal_renderer.mm
+		core/rend/metal/metal_shaders.h
+		core/rend/metal/metal_shaders.mm
+		core/rend/metal/metal_texture.h
+		core/rend/metal/metal_texture.mm)
+
+	# Link required Metal frameworks
+	find_library(METAL_LIBRARY Metal)
+	find_library(QUARTZCORE_LIBRARY QuartzCore)
+	find_library(METALKIT_LIBRARY MetalKit)
+	find_library(COREGRAPHICS_LIBRARY CoreGraphics)
+	target_link_libraries(${PROJECT_NAME} PRIVATE
+		${METAL_LIBRARY}
+		${QUARTZCORE_LIBRARY}
+		${METALKIT_LIBRARY}
+		${COREGRAPHICS_LIBRARY})
+
+	target_compile_definitions(${PROJECT_NAME} PRIVATE USE_METAL HAVE_METAL)
 endif()
 
 if(ENABLE_GDB_SERVER)

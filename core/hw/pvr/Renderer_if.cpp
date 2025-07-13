@@ -270,6 +270,8 @@ Renderer* rend_OITVulkan();
 Renderer* rend_DirectX9();
 Renderer* rend_DirectX11();
 Renderer* rend_OITDirectX11();
+Renderer* rend_Metal();
+Renderer* rend_OITMetal();
 
 static void rend_create_renderer()
 {
@@ -310,6 +312,14 @@ static void rend_create_renderer()
 		renderer = rend_OITDirectX11();
 		break;
 #endif
+#ifdef USE_METAL
+	case RenderType::Metal:
+		renderer = rend_Metal();
+		break;
+	case RenderType::Metal_OIT:
+		renderer = rend_OITMetal();
+		break;
+#endif
 	}
 #endif
 }
@@ -330,6 +340,14 @@ bool rend_init_renderer()
 
 void rend_term_renderer()
 {
+	// Properly coordinate renderer termination with the message queue to prevent
+	// race conditions. This ensures that:
+	// 1. All queued RenderFramebuffer and Present messages are removed from the queue
+	// 2. A Stop message is enqueued to terminate any active message processing
+	// 3. The renderer is only terminated after the queue is properly drained
+	// This prevents crashes where messages try to access a null renderer pointer.
+	rend_cancel_emu_wait();
+
 	if (renderer != nullptr)
 	{
 		renderer->Term();

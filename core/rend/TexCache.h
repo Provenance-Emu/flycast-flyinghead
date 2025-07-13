@@ -288,6 +288,7 @@ void WriteFramebuffer(u32 width, u32 height, const u8 *data, u32 dstAddr, FB_W_C
 template<int Red = 0, int Green = 1, int Blue = 2, int Alpha = 3>
 void WriteTextureToVRam(u32 width, u32 height, const u8 *data, u16 *dst, FB_W_CTRL_type fb_w_ctrl, u32 linestride);
 void getRenderToTextureDimensions(u32& width, u32& height, u32& pow2Width, u32& pow2Height);
+void getRenderToTextureCoordinates(u32& x, u32& y, u32 targetPow2Width, u32 targetPow2Height);
 
 static inline void MakeFogTexture(u8 *tex_data)
 {

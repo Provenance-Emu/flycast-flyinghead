@@ -149,7 +149,12 @@ void DXContext::Present()
 		if (swapOnVSync != (!settings.input.fastForwardMode && config::VSync))
 		{
 			DEBUG_LOG(RENDERER, "Switch vsync %d", !swapOnVSync);
-			rend_term_renderer();
+			if (renderer != nullptr)
+			{
+				renderer->Term();
+				delete renderer;
+				renderer = nullptr;
+			}
 			term();
 			if (init(true))
 			{

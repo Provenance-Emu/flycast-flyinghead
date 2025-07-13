@@ -52,7 +52,7 @@ static void vramlock_list_remove(vram_block* block)
 		}
 	}
 }
-
+ 
 static void vramlock_list_add(vram_block* block)
 {
 	u32 base = block->start / PAGE_SIZE;
@@ -71,7 +71,7 @@ static void vramlock_list_add(vram_block* block)
 			list.push_back(block);
 	}
 }
-
+ 
 static std::mutex vramlist_lock;
 
 bool VramLockedWriteOffset(size_t offset)
@@ -1219,15 +1219,12 @@ void BaseTextureCacheData::invalidate()
 
 void getRenderToTextureDimensions(u32& width, u32& height, u32& pow2Width, u32& pow2Height)
 {
-	// Calculate power-of-2 dimensions first
 	pow2Width = 8;
 	while (pow2Width < width)
 		pow2Width *= 2;
 	pow2Height = 8;
 	while (pow2Height < height)
 		pow2Height *= 2;
-
-	// Apply upscaling if not using render-to-texture buffer
 	if (!config::RenderToTextureBuffer)
 	{
 		float upscale = config::RenderResolution / 480.f;
@@ -1236,15 +1233,6 @@ void getRenderToTextureDimensions(u32& width, u32& height, u32& pow2Width, u32& 
 		pow2Width *= upscale;
 		pow2Height *= upscale;
 	}
-}
-
-// Separate function for coordinate calculations to avoid misuse
-void getRenderToTextureCoordinates(u32& x, u32& y, u32 targetPow2Width, u32 targetPow2Height)
-{
-	// Clamp coordinates to ensure they don't exceed the target texture bounds
-	// This prevents Metal validation errors when dimensions change dynamically
-	x = std::min(x, targetPow2Width > 0 ? targetPow2Width - 1 : 0);
-	y = std::min(y, targetPow2Height > 0 ? targetPow2Height - 1 : 0);
 }
 
 #ifdef TEST_AUTOMATION

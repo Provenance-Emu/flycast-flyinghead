@@ -102,8 +102,6 @@ enum class RenderType {
 	DirectX9 = 1,
 	DirectX11 = 2,
 	DirectX11_OIT = 6,
-	Metal = 7,
-	Metal_OIT = 8,
 };
 
 static inline bool isOpenGL(RenderType renderType)  {
@@ -114,9 +112,6 @@ static inline bool isVulkan(RenderType renderType) {
 }
 static inline bool isDirectX(RenderType renderType) {
 	return renderType == RenderType::DirectX9 || renderType == RenderType::DirectX11 || renderType == RenderType::DirectX11_OIT;
-}
-static inline bool isMetal(RenderType renderType) {
-	return renderType == RenderType::Metal || renderType == RenderType::Metal_OIT;
 }
 
 enum class KeyboardLayout {
@@ -266,3 +261,4 @@ constexpr size_t operator""_GB(unsigned long long  x)
 constexpr u32 RAM_SIZE_MAX = 32_MB;
 constexpr u32 VRAM_SIZE_MAX = 16_MB;
 constexpr u32 ARAM_SIZE_MAX = 8_MB;
+

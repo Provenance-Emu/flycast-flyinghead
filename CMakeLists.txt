@@ -1472,6 +1472,19 @@ if(USE_VULKAN)
 			core/rend/vulkan/vulkan_context.h
 			core/rend/vulkan/vulkan.h
 			core/rend/vulkan/vulkan_renderer.cpp)
+
+	# iOS/tvOS-specific Vulkan optimizations
+	if((IOS OR TVOS) AND LIBRETRO)
+		target_sources(${PROJECT_NAME} PRIVATE
+				core/rend/vulkan/texture_streaming_ios.cpp
+				core/rend/vulkan/texture_streaming_ios.h
+				core/hw/pvr/ta_neon_optimizations.h)
+		target_compile_definitions(${PROJECT_NAME} PRIVATE
+				IOS_VULKAN_OPTIMIZATIONS
+				ENABLE_IOS_TEXTURE_STREAMING
+				ENABLE_TA_NEON_OPTIMIZATIONS)
+	endif()
+
 	if(LIBRETRO)
 		target_sources(${PROJECT_NAME} PRIVATE
 				core/rend/vulkan/vk_context_lr.cpp
@@ -1782,13 +1795,15 @@ if(NOT LIBRETRO)
 			find_library(GAMECONTROLLER GameController)
 			find_library(AUDIOTOOLBOX AudioToolbox)
 			find_library(AVFOUNDATION AVFoundation)
+			find_library(ACCELERATE Accelerate)
 			target_link_libraries(${PROJECT_NAME} PRIVATE
 				${UIKIT}
 				${FOUNDATION}
 				${GLKIT}
 				${GAMECONTROLLER}
 				${AUDIOTOOLBOX}
-				${AVFOUNDATION})
+				${AVFOUNDATION}
+				${ACCELERATE})
 
 			add_custom_target(Flycast.IPA ALL
 				DEPENDS ${PROJECT_NAME}

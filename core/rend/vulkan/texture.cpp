@@ -23,6 +23,114 @@
 #include <algorithm>
 #include <memory>
 
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
+
+#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+
+/// NEON-optimized texture upload for ARM devices
+void optimized_texture_upload(void* dst, const void* src, int width, int height, int bytes_per_pixel, int src_stride, int dst_stride)
+{
+    const uint8_t* s = (const uint8_t*)src;
+    uint8_t* d = (uint8_t*)dst;
+
+    const int row_bytes = width * bytes_per_pixel;
+
+    // If strides match and we can do a single bulk copy
+    if (src_stride == dst_stride && src_stride == row_bytes) {
+        const size_t totalSize = height * row_bytes;
+
+        // Use NEON for bulk copy when size is large enough and properly aligned
+        if (totalSize >= 64 && (totalSize % 32) == 0) {
+            const size_t vecSize = totalSize & ~31; // Process 32 bytes at a time
+
+            for (size_t i = 0; i < vecSize; i += 32) {
+                uint8x16_t v1 = vld1q_u8(s + i);
+                uint8x16_t v2 = vld1q_u8(s + i + 16);
+                vst1q_u8(d + i, v1);
+                vst1q_u8(d + i + 16, v2);
+            }
+
+            // Copy remaining bytes with regular memcpy
+            if (vecSize < totalSize) {
+                memcpy(d + vecSize, s + vecSize, totalSize - vecSize);
+            }
+        } else {
+            memcpy(d, s, totalSize);
+        }
+    } else {
+        // Row-by-row copy when strides differ
+        for (int y = 0; y < height; y++) {
+            // Use NEON for row copy if row is large enough
+            if (row_bytes >= 64 && (row_bytes % 32) == 0) {
+                const uint8_t* src_row = s + y * src_stride;
+                uint8_t* dst_row = d + y * dst_stride;
+
+                for (int i = 0; i < row_bytes; i += 32) {
+                    uint8x16_t v1 = vld1q_u8(src_row + i);
+                    uint8x16_t v2 = vld1q_u8(src_row + i + 16);
+                    vst1q_u8(dst_row + i, v1);
+                    vst1q_u8(dst_row + i + 16, v2);
+                }
+            } else {
+                memcpy(d + y * dst_stride, s + y * src_stride, row_bytes);
+            }
+        }
+    }
+}
+#endif
+
+/// iOS device memory tier detection for texture streaming optimization
+#ifdef __APPLE__
+#if TARGET_OS_IOS
+enum class IOSDeviceMemoryTier {
+    LOW_MEMORY,    // <2GB total memory (older iPads)
+    MEDIUM_MEMORY, // 2-4GB total memory
+    HIGH_MEMORY    // >4GB total memory (modern devices)
+};
+
+static IOSDeviceMemoryTier detectIOSDeviceMemoryTier() {
+    static IOSDeviceMemoryTier cachedTier = IOSDeviceMemoryTier::MEDIUM_MEMORY;
+    static bool detected = false;
+
+    if (!detected) {
+        size_t total_memory = 0;
+        size_t length = sizeof(total_memory);
+
+        if (sysctlbyname("hw.memsize", &total_memory, &length, nullptr, 0) == 0) {
+            const size_t GB = 1024ULL * 1024ULL * 1024ULL;
+            if (total_memory < 2 * GB) {
+                cachedTier = IOSDeviceMemoryTier::LOW_MEMORY;
+                INFO_LOG(RENDERER, "🔧 iOS Low Memory Device Detected: %.2f GB",
+                         total_memory / (1024.0 * 1024.0 * 1024.0));
+            } else if (total_memory < 4 * GB) {
+                cachedTier = IOSDeviceMemoryTier::MEDIUM_MEMORY;
+                INFO_LOG(RENDERER, "📱 iOS Medium Memory Device: %.2f GB",
+                         total_memory / (1024.0 * 1024.0 * 1024.0));
+            } else {
+                cachedTier = IOSDeviceMemoryTier::HIGH_MEMORY;
+                INFO_LOG(RENDERER, "🚀 iOS High Memory Device: %.2f GB",
+                         total_memory / (1024.0 * 1024.0 * 1024.0));
+            }
+        }
+        detected = true;
+    }
+    return cachedTier;
+}
+
+/// Get optimal texture upload strategy based on device memory
+static bool shouldUseConservativeTextureStreaming() {
+    return detectIOSDeviceMemoryTier() == IOSDeviceMemoryTier::LOW_MEMORY;
+}
+#else
+static bool shouldUseConservativeTextureStreaming() { return false; }
+#endif
+#else
+static bool shouldUseConservativeTextureStreaming() { return false; }
+#endif
+
 void setImageLayout(vk::CommandBuffer const& commandBuffer, vk::Image image, vk::Format format, u32 mipmapLevels, vk::ImageLayout oldImageLayout, vk::ImageLayout newImageLayout)
 {
 	static const float scopeColor[4] = { 0.75f, 0.75f, 0.0f, 1.0f };
@@ -245,6 +353,16 @@ void Texture::CreateImage(vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk:
 #ifndef __APPLE__
 	if (!needsStaging)
 		allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_MAPPED_BIT;
+#else
+	/// iOS memory optimization: use conservative allocation for older devices
+	if (shouldUseConservativeTextureStreaming()) {
+		// On low-memory devices, avoid dedicated allocation to conserve memory
+		// This helps older iPads with limited RAM avoid memory pressure
+		DEBUG_LOG(RENDERER, "🔧 iOS Low Memory: Using conservative texture allocation (%dx%d)", extent.width, extent.height);
+	} else if (!needsStaging) {
+		// On higher-memory devices, use dedicated allocation for better performance
+		allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+	}
 #endif
 	allocation = VulkanContext::Instance()->GetAllocator().AllocateForImage(*image, allocCreateInfo);
 
@@ -289,7 +407,28 @@ void Texture::SetImage(u32 srcSize, const void *srcData, bool isNew, bool genMip
 		for (u32 i = 0; i < mipmapLevels; i++)
 		{
 			const u32 size = (1 << (2 * i)) * 2;
+
+			/// Use NEON-optimized copy for ARM devices when available
+#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+			if (size >= 32) {
+				// Use optimized copy for larger transfers
+				const size_t vecSize = size & ~31;
+				for (size_t j = 0; j < vecSize; j += 32) {
+					uint8x16_t v1 = vld1q_u8(src + j);
+					uint8x16_t v2 = vld1q_u8(src + j + 16);
+					vst1q_u8(dst + j, v1);
+					vst1q_u8(dst + j + 16, v2);
+				}
+				// Copy remaining bytes
+				for (size_t j = vecSize; j < size; j++)
+					dst[j] = src[j];
+			} else {
+				memcpy(dst, src, size);
+			}
+#else
 			memcpy(dst, src, size);
+#endif
+
 			dst += ((size + 3) >> 2) << 2;
 			src += size;
 		}
@@ -307,15 +446,74 @@ void Texture::SetImage(u32 srcSize, const void *srcData, bool isNew, bool genMip
 			else if (tex_type == TextureType::_8)
 				srcSz /= 2;
 			u8 * const srcEnd = src + srcSz * extent.height;
+
+			/// Use NEON-optimized texture upload for iOS devices
+#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+			// Calculate bytes per pixel correctly
+			int bytes_per_pixel = 2; // Default for most formats
+			if (tex_type == TextureType::_8888)
+				bytes_per_pixel = 4;
+			else if (tex_type == TextureType::_8)
+				bytes_per_pixel = 1;
+
+			// For iOS devices, use optimized upload when beneficial and safe
+			const bool useOptimizedUpload = (srcSz >= 64) && (extent.height > 1) && (srcSz == extent.width * bytes_per_pixel);
+			if (useOptimizedUpload) {
+				optimized_texture_upload(dst, src, extent.width, extent.height,
+					bytes_per_pixel, srcSz, (int)layout.rowPitch);
+			} else {
+				for (; src < srcEnd; src += srcSz, dst += layout.rowPitch)
+					memcpy(dst, src, srcSz);
+			}
+#else
 			for (; src < srcEnd; src += srcSz, dst += layout.rowPitch)
 				memcpy(dst, src, srcSz);
+#endif
 		}
-		else
+		else {
+			/// Use NEON-optimized copy for larger textures on ARM devices
+#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+			// Calculate bytes per pixel correctly
+			int bytes_per_pixel = 2; // Default for most formats
+			if (tex_type == TextureType::_8888)
+				bytes_per_pixel = 4;
+			else if (tex_type == TextureType::_8)
+				bytes_per_pixel = 1;
+
+			int stride = extent.width * bytes_per_pixel;
+			if (srcSize >= 64 && srcSize == extent.width * extent.height * bytes_per_pixel) {
+				optimized_texture_upload(data, srcData, extent.width, extent.height,
+					bytes_per_pixel, stride, stride);
+			} else {
+				memcpy(data, srcData, srcSize);
+			}
+#else
 			memcpy(data, srcData, srcSize);
+#endif
+		}
 		allocation.UnmapMemory();
 	}
-	else
+	else {
+		/// Use NEON-optimized copy for staging buffers on ARM devices
+#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+		// Calculate bytes per pixel correctly
+		int bytes_per_pixel = 2; // Default for most formats
+		if (tex_type == TextureType::_8888)
+			bytes_per_pixel = 4;
+		else if (tex_type == TextureType::_8)
+			bytes_per_pixel = 1;
+
+		int stride = extent.width * bytes_per_pixel;
+		if (srcSize >= 64 && srcSize == extent.width * extent.height * bytes_per_pixel) {
+			optimized_texture_upload(data, srcData, extent.width, extent.height,
+				bytes_per_pixel, stride, stride);
+		} else {
+			memcpy(data, srcData, srcSize);
+		}
+#else
 		memcpy(data, srcData, srcSize);
+#endif
+	}
 
 	if (needsStaging)
 	{

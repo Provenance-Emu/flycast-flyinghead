@@ -752,64 +752,6 @@ vk::UniqueShaderModule ShaderManager::compileShader(const VertexShaderParams& pa
 
 vk::UniqueShaderModule ShaderManager::compileShader(const FragmentShaderParams& params)
 {
-#ifdef __APPLE__
-#if TARGET_OS_IOS || TARGET_OS_TV
-	// Check if we should use ALU-optimized shaders for iOS
-	static bool useALUOptimization = []() {
-		// Enable ALU optimization for older iOS devices or when explicitly requested
-		const char* optimizeEnv = getenv("FLYCAST_OPTIMIZE_ALU");
-		if (optimizeEnv && strcmp(optimizeEnv, "1") == 0) {
-			return true;
-		}
-
-		// Auto-detect based on device capabilities
-		size_t size;
-		sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
-		std::string machine(size, '\0');
-		sysctlbyname("hw.machine", &machine[0], &size, nullptr, 0);
-		machine.resize(size - 1);
-
-		// Enable for A9/A10 devices (iPhone 6s, 7, iPad 2017, Apple TV 4K 1st gen)
-		if (machine.find("iPhone8,") == 0 || machine.find("iPhone9,") == 0 ||
-			machine.find("iPad6,") == 0 || machine.find("iPad7,") == 0 ||
-			machine.find("AppleTV6,") == 0) {
-			INFO_LOG(RENDERER, "🔧 ALU Optimization enabled for device: %s", machine.c_str());
-			return true;
-		}
-
-		return false;
-	}();
-
-	if (useALUOptimization) {
-		// Use optimized shaders for ALU-bound scenarios
-		std::string optimizedSource = flycast::FragmentShaderOptimizer::GenerateOptimizedShader(params, true);
-
-		VulkanSource src;
-		src.addConstant("cp_AlphaTest", (int)params.alphaTest)
-			.addConstant("pp_ClipInside", (int)params.insideClipTest)
-			.addConstant("pp_UseAlpha", (int)params.useAlpha)
-			.addConstant("pp_Texture", (int)params.texture)
-			.addConstant("pp_IgnoreTexA", (int)params.ignoreTexAlpha)
-			.addConstant("pp_ShadInstr", params.shaderInstr)
-			.addConstant("pp_Offset", (int)params.offset)
-			.addConstant("pp_FogCtrl", params.fog)
-			.addConstant("pp_Gouraud", (int)params.gouraud)
-			.addConstant("pp_BumpMap", (int)params.bumpmap)
-			.addConstant("ColorClamping", (int)params.clamping)
-			.addConstant("pp_TriLinear", (int)params.trilinear)
-			.addConstant("pp_Palette", params.palette)
-			.addConstant("DIV_POS_Z", (int)params.divPosZ)
-			.addConstant("DITHERING", (int)params.dithering)
-			.addSource(GouraudSource)
-			.addSource(optimizedSource);
-
-		DEBUG_LOG(RENDERER, "🚀 Using ALU-optimized fragment shader");
-		return ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment, src.generate());
-	}
-#endif
-#endif
-
-	// Original shader compilation for non-iOS or non-optimized builds
 	VulkanSource src;
 	src.addConstant("cp_AlphaTest", (int)params.alphaTest)
 		.addConstant("pp_ClipInside", (int)params.insideClipTest)
@@ -827,9 +769,141 @@ vk::UniqueShaderModule ShaderManager::compileShader(const FragmentShaderParams& 
 		.addConstant("DIV_POS_Z", (int)params.divPosZ)
 		.addConstant("DITHERING", (int)params.dithering)
 		.addSource(GouraudSource)
-		.addSource(FragmentShaderTop)
-		.addSource(FragmentShaderCommon)
-		.addSource(FragmentShaderMain);
+		.addSource(FragmentShaderTop);
+
+	// Use optimized shader variants for ALU-bound scenarios
+	if (flycast::FragmentShaderOptimizer::ShouldOptimize()) {
+		DEBUG_LOG(RENDERER, "🚀 Using ALU-optimized fragment shader components");
+
+		// Add optimized fog shader
+		if (params.fog != 2) {
+			src.addSource(flycast::FragmentShaderOptimizer::FastFogShader());
+		} else {
+			src.addSource(FragmentShaderCommon);
+		}
+
+		// Add optimized palette shader
+		if (params.palette != 0) {
+			src.addSource(flycast::FragmentShaderOptimizer::FastPaletteShader());
+		} else {
+			src.addSource(FragmentShaderCommon);
+		}
+
+		// Add optimized main shader with fast depth and dithering
+		src.addSource(R"(
+void main()
+{
+	// Clip inside the box
+	#if pp_ClipInside == 1
+		if (gl_FragCoord.x >= pushConstants.clipTest.x && gl_FragCoord.x <= pushConstants.clipTest.z
+				&& gl_FragCoord.y >= pushConstants.clipTest.y && gl_FragCoord.y <= pushConstants.clipTest.w)
+			discard;
+	#endif
+
+	highp vec4 color = vtx_base;
+	highp vec4 offset = vtx_offs;
+	#if pp_Gouraud == 1 && DIV_POS_Z != 1
+		color /= vtx_uv.z;
+		offset /= vtx_uv.z;
+	#endif
+	#if pp_UseAlpha == 0
+		color.a = 1.0;
+	#endif
+	#if pp_FogCtrl == 3
+		color = vec4(uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z));
+	#endif
+	#if pp_Texture == 1
+	{
+		#if pp_Palette == 0
+			#if DIV_POS_Z == 1
+				vec4 texcol = texture(tex, vtx_uv.xy);
+			#else
+				vec4 texcol = textureProj(tex, vtx_uv);
+			#endif
+		#else
+			#if pp_Palette == 1
+				vec4 texcol = palettePixel(tex, vtx_uv);
+			#else
+				vec4 texcol = palettePixelBilinear(tex, vtx_uv);
+			#endif
+		#endif
+
+		#if pp_BumpMap == 1
+			float s = PI / 2.0 * (texcol.a * 15.0 * 16.0 + texcol.r * 15.0) / 255.0;
+			float r = 2.0 * PI * (texcol.g * 15.0 * 16.0 + texcol.b * 15.0) / 255.0;
+			texcol.a = clamp(offset.a + offset.r * sin(s) + offset.g * cos(s) * cos(r - 2.0 * PI * offset.b), 0.0, 1.0);
+			texcol.rgb = vec3(1.0, 1.0, 1.0);
+		#else
+			#if pp_IgnoreTexA == 1
+				texcol.a = 1.0;
+			#endif
+		#endif
+		#if pp_ShadInstr == 0
+		{
+			color = texcol;
+		}
+		#endif
+		#if pp_ShadInstr == 1
+		{
+			color.rgb *= texcol.rgb;
+			color.a = texcol.a;
+		}
+		#endif
+		#if pp_ShadInstr == 2
+		{
+			color.rgb = mix(color.rgb, texcol.rgb, texcol.a);
+		}
+		#endif
+		#if  pp_ShadInstr == 3
+		{
+			color *= texcol;
+		}
+		#endif
+
+		#if pp_Offset == 1 && pp_BumpMap == 0
+		{
+			color.rgb += offset.rgb;
+		}
+		#endif
+	}
+	#endif
+
+	color = colorClamp(color);
+
+	#if pp_FogCtrl == 0
+	{
+		color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z));
+	}
+	#endif
+	#if pp_FogCtrl == 1 && pp_Offset==1 && pp_BumpMap == 0
+	{
+		color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_VERT.rgb, offset.a);
+	}
+	#endif
+
+	#if pp_TriLinear == 1
+	color *= pushConstants.trilinearAlpha;
+	#endif
+
+	#if cp_AlphaTest == 1
+		color.a = round(color.a * 255.0) / 255.0;
+		if (uniformBuffer.cp_AlphaTestValue > color.a)
+			discard;
+		color.a = 1.0;
+	#endif
+
+	)" + std::string(flycast::FragmentShaderOptimizer::FastDepthShader()) + R"(
+
+	)" + std::string(flycast::FragmentShaderOptimizer::FastDitherShader()) + R"(
+
+	gl_FragColor = color;
+}
+)");
+	} else {
+		// Use original shaders for non-optimized builds
+		src.addSource(FragmentShaderCommon).addSource(FragmentShaderMain);
+	}
+
 	return ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment, src.generate());
 }
 

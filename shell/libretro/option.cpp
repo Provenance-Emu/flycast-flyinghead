@@ -150,8 +150,8 @@ std::array<std::array<Option<MapleDeviceType>, 2>, 4> MapleExpansionDevices {
 	Option<MapleDeviceType>("", MDT_None),
 };
 
-config::Option<bool> ForceWinCE("libretro.ForceWinCE", false);
-config::Option<bool> MapleExpansion("libretro.MapleExpansion", false);
-config::Option<bool> GpuDrivenRendering("libretro.GpuDrivenRendering", true);  // GPU-driven rendering for mobile
+config::Option<bool> ForceWinCE(CORE_OPTION_NAME "_force_wince", false);
+config::Option<bool> MapleExpansion(CORE_OPTION_NAME "_maple_expansion", false);
+config::Option<bool> GpuDrivenRendering(CORE_OPTION_NAME "_gpu_driven_rendering", true);  // GPU-driven rendering for mobile
 
 } // namespace config

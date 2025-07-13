@@ -1459,6 +1459,10 @@ if(USE_VULKAN)
 			core/rend/vulkan/drawer.h
 			core/rend/vulkan/gpu_driven_renderer.cpp
 			core/rend/vulkan/gpu_driven_renderer.h
+			core/rend/vulkan/fmv_async_pipeline.cpp
+			core/rend/vulkan/fmv_async_pipeline.h
+			core/rend/vulkan/fence_free_submitter.cpp
+			core/rend/vulkan/fence_free_submitter.h
 			core/rend/vulkan/pipeline.cpp
 			core/rend/vulkan/pipeline.h
 			core/rend/vulkan/quad.cpp

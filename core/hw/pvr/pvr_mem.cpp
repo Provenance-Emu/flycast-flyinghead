@@ -11,6 +11,10 @@
 #include "hw/holly/holly_intc.h"
 #include "serialize.h"
 
+#ifdef USE_VULKAN
+#include "rend/vulkan/fmv_async_pipeline.h"
+#endif
+
 static u32 pvr_map32(u32 offset32);
 
 RamRegion vram;
@@ -100,7 +104,33 @@ static void YUV_ConvertMacroBlock(const u8 *datap)
 	//do shit
 	TA_YUV_TEX_CNT++;
 
+#ifdef USE_VULKAN
+	// Use async FMV pipeline if available (eliminates CPU stalls)
+	if (g_asyncFMVPipeline && g_asyncFMVPipeline->IsBusy() == false) {
+		// Queue YUV data for async processing
+		g_asyncFMVPipeline->QueueYUVFrame(datap, 16, 16, TA_YUV_TEX_CNT);
+
+		// Try to get processed frame
+		AsyncFMVPipeline::FMVFrame processedFrame;
+		if (g_asyncFMVPipeline->GetProcessedFrame(processedFrame)) {
+			// Copy processed RGB data to VRAM
+			memcpy(&vram[YUV_dest], processedFrame.rgbData, 16 * 16 * 4);
+
+			// Return buffers to pool
+			g_asyncFMVPipeline->ReturnRGBBuffer(processedFrame.rgbData);
+			g_asyncFMVPipeline->ReturnYUVBuffer(processedFrame.yuvData);
+		} else {
+			// Fallback to synchronous processing if async not ready
+			YUV_Block384(datap, &vram[YUV_dest]);
+		}
+	} else {
+		// Fallback to synchronous processing
+		YUV_Block384(datap, &vram[YUV_dest]);
+	}
+#else
+	// Default synchronous processing
 	YUV_Block384(datap, &vram[YUV_dest]);
+#endif
 
 	YUV_dest+=32;
 
@@ -119,7 +149,7 @@ static void YUV_ConvertMacroBlock(const u8 *datap)
 	if (YUV_blockcount==TA_YUV_TEX_CNT)
 	{
 		YUV_init();
-		
+
 		asic_RaiseInterrupt(holly_YUV_DMA);
 	}
 }
@@ -301,7 +331,7 @@ static u32 pvr_map32(u32 offset32)
 	rv |= (offset32 & offset_bits) * 2;
 
 	rv |= bank * 4;
-	
+
 	return rv;
 }
 

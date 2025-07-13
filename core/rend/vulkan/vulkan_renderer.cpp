@@ -21,6 +21,8 @@
 #include "vulkan.h"
 #include "vulkan_renderer.h"
 #include "gpu_driven_renderer.h"
+#include "fmv_async_pipeline.h"
+#include "fence_free_submitter.h"
 #include "drawer.h"
 #include "hw/pvr/ta.h"
 #include "rend/transform_matrix.h"
@@ -338,6 +340,26 @@ public:
 #endif
 #endif
 
+		/// Initialize Async FMV Pipeline for CPU stall elimination
+		g_asyncFMVPipeline = std::make_unique<AsyncFMVPipeline>();
+		if (g_asyncFMVPipeline->Init(GetContext())) {
+			g_asyncFMVPipeline->StartProcessing();
+			INFO_LOG(RENDERER, "🎬 Async FMV Pipeline initialized - CPU stalls eliminated");
+		} else {
+			WARN_LOG(RENDERER, "⚠️ Async FMV Pipeline initialization failed");
+			g_asyncFMVPipeline.reset();
+		}
+
+		/// Initialize Fence-Free Submitter for GPU synchronization optimization
+		g_fenceFreeSubmitter = std::make_unique<FenceFreeSubmitter>();
+		if (g_fenceFreeSubmitter->Init(GetContext())) {
+			g_fenceFreeSubmitter->StartSubmissionThread();
+			INFO_LOG(RENDERER, "🚀 Fence-Free Submitter initialized - GPU sync stalls eliminated");
+		} else {
+			WARN_LOG(RENDERER, "⚠️ Fence-Free Submitter initialization failed");
+			g_fenceFreeSubmitter.reset();
+		}
+
 		return true;
 	}
 
@@ -345,6 +367,18 @@ public:
 	{
 		DEBUG_LOG(RENDERER, "VulkanRenderer::Term");
 		GetContext()->WaitIdle();
+
+		/// Terminate Async FMV Pipeline
+		if (g_asyncFMVPipeline) {
+			g_asyncFMVPipeline->Term();
+			g_asyncFMVPipeline.reset();
+		}
+
+		/// Terminate Fence-Free Submitter
+		if (g_fenceFreeSubmitter) {
+			g_fenceFreeSubmitter->Term();
+			g_fenceFreeSubmitter.reset();
+		}
 
 		/// Terminate GPU-driven renderer
 		if (g_gpuDrivenRenderer) {

@@ -38,8 +38,7 @@
 
 #if defined(__APPLE__)
 #include "TargetConditionals.h"
-#if TARGET_OS_SIMULATOR
-// iOS simulator
+#if TARGET_OS_SIMULATOR || defined(LIBRETRO)
 #define TARGET_NO_REC
 #endif
 #if defined(TARGET_MAC) && HOST_CPU == CPU_ARM64

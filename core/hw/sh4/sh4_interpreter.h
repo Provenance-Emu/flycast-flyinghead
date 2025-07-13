@@ -6,7 +6,7 @@ class Sh4Interpreter : public Sh4Executor
 {
 public:
 	void Run() override;
-	void ResetCache() override  {}
+	void ResetCache() override;
 	void Start() override;
 	void Stop() override;
 	void Step() override;
@@ -23,11 +23,19 @@ public:
 protected:
 	Sh4Context *ctx = nullptr;
 
+public:
+	Sh4Cycles sh4cycles{CPU_RATIO};
+
 private:
 	void ExecuteOpcode(u16 op);
 	u16 ReadNexOp();
 
-	Sh4Cycles sh4cycles{CPU_RATIO};
+	// Optimized execution methods
+	u16 FetchInstructionOptimized(u8* cycles_out);
+	void ExecutePerformanceMegaBatch();
+	void ExecuteHotBatch();
+	void ExecuteNormalBatch();
+	void ExecuteAdaptiveBatch();
 	// SH4 underclock factor when using the interpreter so that it's somewhat usable
 #ifdef STRICT_MODE
 	static constexpr int CPU_RATIO = 1;

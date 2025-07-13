@@ -22,6 +22,12 @@
 #include "shaders.h"
 #include "compiler.h"
 #include "utils.h"
+#include "frag_shader_optimizer.h"
+#include <string>
+#include <cstring>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 
 static const char VertexShaderSource[] = R"(
 layout (std140, set = 0, binding = 0) uniform VertexShaderUniforms
@@ -190,7 +196,7 @@ void main()
 				&& gl_FragCoord.y >= pushConstants.clipTest.y && gl_FragCoord.y <= pushConstants.clipTest.w)
 			discard;
 	#endif
-	
+
 	highp vec4 color = vtx_base;
 	highp vec4 offset = vtx_offs;
 	#if pp_Gouraud == 1 && DIV_POS_Z != 1
@@ -218,12 +224,12 @@ void main()
 				vec4 texcol = palettePixelBilinear(tex, vtx_uv);
 			#endif
 		#endif
-		
+
 		#if pp_BumpMap == 1
 			float s = PI / 2.0 * (texcol.a * 15.0 * 16.0 + texcol.r * 15.0) / 255.0;
 			float r = 2.0 * PI * (texcol.g * 15.0 * 16.0 + texcol.b * 15.0) / 255.0;
 			texcol.a = clamp(offset.a + offset.r * sin(s) + offset.g * cos(s) * cos(r - 2.0 * PI * offset.b), 0.0, 1.0);
-			texcol.rgb = vec3(1.0, 1.0, 1.0);	
+			texcol.rgb = vec3(1.0, 1.0, 1.0);
 		#else
 			#if pp_IgnoreTexA == 1
 				texcol.a = 1.0;
@@ -250,7 +256,7 @@ void main()
 			color *= texcol;
 		}
 		#endif
-		
+
 		#if pp_Offset == 1 && pp_BumpMap == 0
 		{
 			color.rgb += offset.rgb;
@@ -258,12 +264,12 @@ void main()
 		#endif
 	}
 	#endif
-	
+
 	color = colorClamp(color);
-	
+
 	#if pp_FogCtrl == 0
 	{
-		color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z)); 
+		color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z));
 	}
 	#endif
 	#if pp_FogCtrl == 1 && pp_Offset==1 && pp_BumpMap == 0
@@ -271,11 +277,11 @@ void main()
 		color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_VERT.rgb, offset.a);
 	}
 	#endif
-	
+
 	#if pp_TriLinear == 1
 	color *= pushConstants.trilinearAlpha;
 	#endif
-	
+
 	#if cp_AlphaTest == 1
 		color.a = round(color.a * 255.0) / 255.0;
 		if (uniformBuffer.cp_AlphaTestValue > color.a)
@@ -294,10 +300,10 @@ void main()
 
 #if DITHERING == 1
 	float ditherTable[16] = float[](
-		 0.9375,  0.1875,  0.75,  0.,   
+		 0.9375,  0.1875,  0.75,  0.,
 		 0.4375,  0.6875,  0.25,  0.5,
 		 0.8125,  0.0625,  0.875, 0.125,
-		 0.3125,  0.5625,  0.375, 0.625	
+		 0.3125,  0.5625,  0.375, 0.625
 	);
 	float r = ditherTable[int(mod(gl_FragCoord.y, 4.)) * 4 + int(mod(gl_FragCoord.x, 4.))];
 	// 31 for 5-bit color, 63 for 6 bits, 15 for 4 bits
@@ -383,7 +389,7 @@ layout (push_constant) uniform pushBlock
 layout (location = 0) in vec2 inUV;
 layout (location = 0) out vec4 FragColor;
 
-void main() 
+void main()
 {
 #if IGNORE_TEX_ALPHA == 1
 	FragColor.rgb = pushConstants.color.rgb * texture(tex, inUV).rgb;
@@ -746,6 +752,64 @@ vk::UniqueShaderModule ShaderManager::compileShader(const VertexShaderParams& pa
 
 vk::UniqueShaderModule ShaderManager::compileShader(const FragmentShaderParams& params)
 {
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+	// Check if we should use ALU-optimized shaders for iOS
+	static bool useALUOptimization = []() {
+		// Enable ALU optimization for older iOS devices or when explicitly requested
+		const char* optimizeEnv = getenv("FLYCAST_OPTIMIZE_ALU");
+		if (optimizeEnv && strcmp(optimizeEnv, "1") == 0) {
+			return true;
+		}
+
+		// Auto-detect based on device capabilities
+		size_t size;
+		sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
+		std::string machine(size, '\0');
+		sysctlbyname("hw.machine", &machine[0], &size, nullptr, 0);
+		machine.resize(size - 1);
+
+		// Enable for A9/A10 devices (iPhone 6s, 7, iPad 2017, Apple TV 4K 1st gen)
+		if (machine.find("iPhone8,") == 0 || machine.find("iPhone9,") == 0 ||
+			machine.find("iPad6,") == 0 || machine.find("iPad7,") == 0 ||
+			machine.find("AppleTV6,") == 0) {
+			INFO_LOG(RENDERER, "🔧 ALU Optimization enabled for device: %s", machine.c_str());
+			return true;
+		}
+
+		return false;
+	}();
+
+	if (useALUOptimization) {
+		// Use optimized shaders for ALU-bound scenarios
+		std::string optimizedSource = flycast::FragmentShaderOptimizer::GenerateOptimizedShader(params, true);
+
+		VulkanSource src;
+		src.addConstant("cp_AlphaTest", (int)params.alphaTest)
+			.addConstant("pp_ClipInside", (int)params.insideClipTest)
+			.addConstant("pp_UseAlpha", (int)params.useAlpha)
+			.addConstant("pp_Texture", (int)params.texture)
+			.addConstant("pp_IgnoreTexA", (int)params.ignoreTexAlpha)
+			.addConstant("pp_ShadInstr", params.shaderInstr)
+			.addConstant("pp_Offset", (int)params.offset)
+			.addConstant("pp_FogCtrl", params.fog)
+			.addConstant("pp_Gouraud", (int)params.gouraud)
+			.addConstant("pp_BumpMap", (int)params.bumpmap)
+			.addConstant("ColorClamping", (int)params.clamping)
+			.addConstant("pp_TriLinear", (int)params.trilinear)
+			.addConstant("pp_Palette", params.palette)
+			.addConstant("DIV_POS_Z", (int)params.divPosZ)
+			.addConstant("DITHERING", (int)params.dithering)
+			.addSource(GouraudSource)
+			.addSource(optimizedSource);
+
+		DEBUG_LOG(RENDERER, "🚀 Using ALU-optimized fragment shader");
+		return ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment, src.generate());
+	}
+#endif
+#endif
+
+	// Original shader compilation for non-iOS or non-optimized builds
 	VulkanSource src;
 	src.addConstant("cp_AlphaTest", (int)params.alphaTest)
 		.addConstant("pp_ClipInside", (int)params.insideClipTest)

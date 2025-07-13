@@ -1462,9 +1462,10 @@ if(USE_VULKAN)
 			core/rend/vulkan/fmv_async_pipeline.cpp
 			core/rend/vulkan/fmv_async_pipeline.h
 			core/rend/vulkan/fence_free_submitter.cpp
-			core/rend/vulkan/fence_free_submitter.h
-			core/rend/vulkan/pipeline.cpp
-			core/rend/vulkan/pipeline.h
+core/rend/vulkan/fence_free_submitter.h
+core/rend/vulkan/frag_shader_optimizer.h
+core/rend/vulkan/pipeline.cpp
+core/rend/vulkan/pipeline.h
 			core/rend/vulkan/quad.cpp
 			core/rend/vulkan/quad.h
 			core/rend/vulkan/shaders.cpp

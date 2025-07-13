@@ -22,6 +22,13 @@
 #include "../compiler.h"
 #include "rend/gl4/glsl.h"
 #include "cfg/option.h"
+#include "../shaders.h"
+#include "../frag_shader_optimizer.h"
+#include <string>
+#include <cstring>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 
 extern const char *FragmentShaderCommon;
 
@@ -123,7 +130,7 @@ uint getNextPixelIndex()
 	if (index >= uniformBuffer.pixelBufferSize)
 		// Buffer overflow
 		discard;
-	
+
 	return index;
 }
 
@@ -217,12 +224,12 @@ void main()
 				&& gl_FragCoord.y >= pushConstants.clipTest.y && gl_FragCoord.y <= pushConstants.clipTest.w)
 			discard;
 	#endif
-	
+
 	vec4 color = vtx_base;
 	vec4 offset = vtx_offs;
 	bool area1 = false;
 	ivec2 cur_blend_mode = pushConstants.blend_mode0.xy;
-	
+
 	#if pp_TwoVolumes == 1
 		bool cur_use_alpha = pushConstants.use_alpha0 != 0;
 		bool cur_ignore_tex_alpha = pushConstants.ignore_tex_alpha0 != 0;
@@ -288,11 +295,11 @@ void main()
 			float s = PI / 2.0 * (texcol.a * 15.0 * 16.0 + texcol.r * 15.0) / 255.0;
 			float r = 2.0 * PI * (texcol.g * 15.0 * 16.0 + texcol.b * 15.0) / 255.0;
 			texcol.a = clamp(offset.a + offset.r * sin(s) + offset.g * cos(s) * cos(r - 2.0 * PI * offset.b), 0.0, 1.0);
-			texcol.rgb = vec3(1.0, 1.0, 1.0);	
+			texcol.rgb = vec3(1.0, 1.0, 1.0);
 		#else
 			#if pp_IgnoreTexA==1 || pp_TwoVolumes == 1
 				IF(cur_ignore_tex_alpha)
-					texcol.a = 1.0;	
+					texcol.a = 1.0;
 			#endif
 		#endif
 		#if pp_ShadInstr == 0 || pp_TwoVolumes == 1 // DECAL
@@ -320,7 +327,7 @@ void main()
 			color *= texcol;
 		}
 		#endif
-		
+
 		#if pp_Offset == 1 && pp_BumpMap == 0
 		{
 			color.rgb += offset.rgb;
@@ -333,13 +340,13 @@ void main()
 		if (stencil.r == 0x81u)
 			color.rgb *= uniformBuffer.shade_scale_factor;
 	#endif
-	
+
 	color = colorClamp(color);
-	
+
 	#if pp_FogCtrl == 0 || pp_TwoVolumes == 1 // LUT
 		IF(cur_fog_control == 0)
 		{
-			color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z)); 
+			color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2(vtx_uv.z));
 		}
 	#endif
 	#if pp_Offset==1 && pp_BumpMap == 0 && (pp_FogCtrl == 1 || pp_TwoVolumes == 1)  // Per vertex
@@ -348,9 +355,9 @@ void main()
 			color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_VERT.rgb, offset.a);
 		}
 	#endif
-	
+
 	color *= pushConstants.trilinearAlpha;
-	
+
 	#if cp_AlphaTest == 1
 		color.a = round(color.a * 255.0) / 255.0;
 		if (uniformBuffer.cp_AlphaTestValue > color.a)
@@ -359,20 +366,20 @@ void main()
 	#endif
 
 	//color.rgb = vec3(vtx_uv.z * uniformBuffer.sp_FOG_DENSITY / 128.0);
-	
-	#if PASS == PASS_COLOR 
+
+	#if PASS == PASS_COLOR
 		FragColor = color;
 	#elif PASS == PASS_OIT
 		ivec2 coords = ivec2(gl_FragCoord.xy);
 		uint idx =  getNextPixelIndex();
-		
+
 		Pixel pixel;
 		pixel.color = packColors(clamp(color, vec4(0.0), vec4(1.0)));
 		pixel.depth = gl_FragDepth;
 		pixel.seq_num = vtx_index;
 		pixel.next = atomicExchange(abufferPointer.pointers[coords.x + coords.y * uniformBuffer.viewportWidth], idx);
 		PixelBuffer.pixels[idx] = pixel;
-		
+
 	#endif
 }
 )";
@@ -430,13 +437,13 @@ int fillAndSortFragmentArray(ivec2 coords)
 
 // Blend fragments back-to-front
 vec4 resolveAlphaBlend(ivec2 coords) {
-	
+
 	// Copy and sort fragments into a local array
 	int num_frag = fillAndSortFragmentArray(coords);
-	
+
 	vec4 finalColor = subpassLoad(tex);
 	vec4 secondaryBuffer = vec4(0.0); // Secondary accumulation buffer
-	
+
 	for (int i = 0; i < num_frag; i++)
 	{
 		const Pixel pixel = PixelBuffer.pixels[pixel_list[i]];
@@ -462,7 +469,7 @@ vec4 resolveAlphaBlend(ivec2 coords) {
 		vec4 dstColor = getDstSelect(pp, area1) ? secondaryBuffer : finalColor;
 		vec4 srcCoef;
 		vec4 dstCoef;
-		
+
 		int srcBlend = getSrcBlendFunc(pp, area1);
 		switch (srcBlend)
 		{
@@ -528,10 +535,10 @@ vec4 resolveAlphaBlend(ivec2 coords) {
 
 #if DITHERING == 1
 	float ditherTable[16] = float[](
-		 0.9375,  0.1875,  0.75,  0.,   
+		 0.9375,  0.1875,  0.75,  0.,
 		 0.4375,  0.6875,  0.25,  0.5,
 		 0.8125,  0.0625,  0.875, 0.125,
-		 0.3125,  0.5625,  0.375, 0.625	
+		 0.3125,  0.5625,  0.375, 0.625
 	);
 	float r = ditherTable[int(mod(gl_FragCoord.y, 4.)) * 4 + int(mod(gl_FragCoord.x, 4.))];
 	// 31 for 5-bit color, 63 for 6 bits, 15 for 4 bits
@@ -540,7 +547,7 @@ vec4 resolveAlphaBlend(ivec2 coords) {
 	finalColor = floor(finalColor * 255.) / 255.;
 #endif
 	return finalColor;
-	
+
 }
 
 void main(void)
@@ -581,7 +588,7 @@ void main()
 	setFragDepth(depth);
 #endif
 	ivec2 coords = ivec2(gl_FragCoord.xy);
-	
+
 	uint idx = abufferPointer.pointers[coords.x + coords.y * uniformBuffer.viewportWidth];
 	int list_len = 0;
 	while (idx != EOL && list_len < MAX_PIXELS_PER_FRAGMENT)
@@ -750,6 +757,301 @@ vk::UniqueShaderModule OITShaderManager::compileShader(const VertexShaderParams&
 
 vk::UniqueShaderModule OITShaderManager::compileShader(const FragmentShaderParams& params)
 {
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+	// Check if we should use ALU-optimized shaders for OIT on iOS
+	static bool useOITALUOptimization = []() {
+		// Enable ALU optimization for older iOS devices or when explicitly requested
+		const char* optimizeEnv = getenv("FLYCAST_OPTIMIZE_OIT_ALU");
+		if (optimizeEnv && strcmp(optimizeEnv, "1") == 0) {
+			return true;
+		}
+
+		// Auto-detect based on device capabilities - OIT is more demanding
+		size_t size;
+		sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
+		std::string machine(size, '\0');
+		sysctlbyname("hw.machine", &machine[0], &size, nullptr, 0);
+		machine.resize(size - 1);
+
+		// Enable for A9/A10/A11 devices (OIT is very demanding)
+		if (machine.find("iPhone8,") == 0 || machine.find("iPhone9,") == 0 ||
+			machine.find("iPhone10,") == 0 ||
+			machine.find("iPad6,") == 0 || machine.find("iPad7,") == 0 ||
+			machine.find("AppleTV6,") == 0) {
+			INFO_LOG(RENDERER, "🔧 OIT ALU Optimization enabled for device: %s", machine.c_str());
+			return true;
+		}
+
+		return false;
+	}();
+
+	if (useOITALUOptimization) {
+		// For OIT, use simplified fragment shaders to reduce ALU load
+		std::string optimizedOITSource = R"(
+// Optimized OIT Fragment Shader - reduced ALU complexity
+#define PASS_DEPTH 0
+#define PASS_COLOR 1
+#define PASS_OIT 2
+
+#if PASS == PASS_DEPTH || PASS == PASS_COLOR
+layout (location = 0) out vec4 FragColor;
+#define gl_FragColor FragColor
+#endif
+
+#if pp_TwoVolumes == 1
+#define IF(x) if (x)
+#else
+#define IF(x)
+#endif
+
+layout (push_constant) uniform pushBlock {
+    vec4 clipTest;
+    ivec4 blend_mode0;
+    float trilinearAlpha;
+    float palette_index;
+
+    // two volume mode
+    ivec4 blend_mode1;
+    int shading_instr0;
+    int shading_instr1;
+    int fog_control0;
+    int fog_control1;
+    int use_alpha0;
+    int use_alpha1;
+    int ignore_tex_alpha0;
+    int ignore_tex_alpha1;
+} pushConstants;
+
+#if pp_Texture == 1
+layout (set = 1, binding = 0) uniform sampler2D tex0;
+#if pp_TwoVolumes == 1
+layout (set = 1, binding = 1) uniform sampler2D tex1;
+#endif
+#endif
+#if pp_Palette != 0
+layout (set = 0, binding = 6) uniform sampler2D palette;
+#endif
+
+#if PASS == PASS_COLOR
+layout (input_attachment_index = 0, set = 0, binding = 4) uniform usubpassInput shadow_stencil;
+#endif
+#if PASS == PASS_OIT
+layout (input_attachment_index = 0, set = 0, binding = 5) uniform subpassInput DepthTex;
+#endif
+
+// Vertex input
+layout (location = 0) INTERPOLATION in highp vec4 vtx_base;
+layout (location = 1) INTERPOLATION in highp vec4 vtx_offs;
+layout (location = 2) in highp vec3 vtx_uv;
+layout (location = 3) INTERPOLATION in highp vec4 vtx_base1;
+layout (location = 4) INTERPOLATION in highp vec4 vtx_offs1;
+layout (location = 5) in highp vec2 vtx_uv1;
+layout (location = 6) flat in uint vtx_index;
+
+#if pp_FogCtrl != 2 || pp_TwoVolumes == 1
+layout (set = 0, binding = 2) uniform sampler2D fog_table;
+#endif
+
+// Optimized fog calculation for OIT
+float fog_mode2_oit_optimized(float w) {
+    float z = clamp(uniformBuffer.sp_FOG_DENSITY * w, 1.0, 255.9999);
+    // Simplified fog calculation - use linear approximation
+    return (z - 1.0) / 254.9999;
+}
+
+// Optimized palette lookup for OIT
+vec4 palettePixelOITOptimized(sampler2D tex, vec3 coords) {
+    float colIdx = texture(tex, coords.xy).r;
+    vec2 c = vec2(colIdx * 0.249756 + pushConstants.palette_index, 0.5);
+    return texture(palette, c);
+}
+
+void main() {
+    setFragDepth(vtx_uv.z);
+
+    #if PASS == PASS_OIT
+        // Optimized depth testing
+        float frontDepth = subpassLoad(DepthTex).r;
+        if (gl_FragDepth < frontDepth)
+            discard;
+    #endif
+
+    // Early discard for clipping
+    #if pp_ClipInside == 1
+        if (gl_FragCoord.x >= pushConstants.clipTest.x && gl_FragCoord.x <= pushConstants.clipTest.z
+                && gl_FragCoord.y >= pushConstants.clipTest.y && gl_FragCoord.y <= pushConstants.clipTest.w)
+            discard;
+    #endif
+
+    vec4 color = vtx_base;
+    vec4 offset = vtx_offs;
+    bool area1 = false;
+    ivec2 cur_blend_mode = pushConstants.blend_mode0.xy;
+
+    #if pp_TwoVolumes == 1
+        bool cur_use_alpha = pushConstants.use_alpha0 != 0;
+        bool cur_ignore_tex_alpha = pushConstants.ignore_tex_alpha0 != 0;
+        int cur_shading_instr = pushConstants.shading_instr0;
+        int cur_fog_control = pushConstants.fog_control0;
+        #if PASS == PASS_COLOR
+            uvec4 stencil = subpassLoad(shadow_stencil);
+            if (stencil.r == 0x81u) {
+                color = vtx_base1;
+                offset = vtx_offs1;
+                area1 = true;
+                cur_blend_mode = pushConstants.blend_mode1.xy;
+                cur_use_alpha = pushConstants.use_alpha1 != 0;
+                cur_ignore_tex_alpha = pushConstants.ignore_tex_alpha1 != 0;
+                cur_shading_instr = pushConstants.shading_instr1;
+                cur_fog_control = pushConstants.fog_control1;
+            }
+        #endif
+    #endif
+
+    #if pp_Gouraud == 1 && DIV_POS_Z != 1
+        color /= vtx_uv.z;
+        offset /= vtx_uv.z;
+    #endif
+
+    #if pp_UseAlpha == 0 || pp_TwoVolumes == 1
+        IF (!cur_use_alpha)
+            color.a = 1.0;
+    #endif
+
+    #if pp_FogCtrl == 3 || pp_TwoVolumes == 1
+        IF (cur_fog_control == 3)
+            color = vec4(uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2_oit_optimized(vtx_uv.z));
+    #endif
+
+    #if pp_Texture == 1
+    {
+        vec4 texcol;
+        #if pp_TwoVolumes == 1
+            if (area1) {
+                #if pp_Palette == 0
+                    texcol = texture(tex1, vtx_uv1);
+                #else
+                    texcol = palettePixelOITOptimized(tex1, vec3(vtx_uv1, vtx_uv.z));
+                #endif
+            } else
+        #endif
+        {
+            #if pp_Palette == 0
+                texcol = texture(tex0, vtx_uv.xy);
+            #else
+                texcol = palettePixelOITOptimized(tex0, vtx_uv);
+            #endif
+        }
+
+        // Simplified bump mapping for OIT
+        #if pp_BumpMap == 1
+            texcol.a = clamp(offset.a + offset.r * 0.5, 0.0, 1.0);
+            texcol.rgb = vec3(1.0);
+        #else
+            #if pp_IgnoreTexA == 1 || pp_TwoVolumes == 1
+                IF(cur_ignore_tex_alpha)
+                    texcol.a = 1.0;
+            #endif
+        #endif
+
+        // Optimized shading instructions
+        #if pp_ShadInstr == 0 || pp_TwoVolumes == 1
+        IF(cur_shading_instr == 0)
+            color = texcol;
+        #endif
+        #if pp_ShadInstr == 1 || pp_TwoVolumes == 1
+        IF(cur_shading_instr == 1) {
+            color.rgb *= texcol.rgb;
+            color.a = texcol.a;
+        }
+        #endif
+        #if pp_ShadInstr == 2 || pp_TwoVolumes == 1
+        IF(cur_shading_instr == 2)
+            color.rgb = mix(color.rgb, texcol.rgb, texcol.a);
+        #endif
+        #if pp_ShadInstr == 3 || pp_TwoVolumes == 1
+        IF(cur_shading_instr == 3)
+            color *= texcol;
+        #endif
+
+        #if pp_Offset == 1 && pp_BumpMap == 0
+            color.rgb += offset.rgb;
+        #endif
+    }
+    #endif
+
+    #if PASS == PASS_COLOR && pp_TwoVolumes == 0
+        uvec4 stencil = subpassLoad(shadow_stencil);
+        if (stencil.r == 0x81u)
+            color.rgb *= uniformBuffer.shade_scale_factor;
+    #endif
+
+    // Optimized color clamping
+    color = clamp(color, uniformBuffer.colorClampMin, uniformBuffer.colorClampMax);
+
+    #if pp_FogCtrl == 0 || pp_TwoVolumes == 1
+        IF(cur_fog_control == 0)
+            color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_RAM.rgb, fog_mode2_oit_optimized(vtx_uv.z));
+    #endif
+
+    #if pp_Offset == 1 && pp_BumpMap == 0 && (pp_FogCtrl == 1 || pp_TwoVolumes == 1)
+        IF(cur_fog_control == 1)
+            color.rgb = mix(color.rgb, uniformBuffer.sp_FOG_COL_VERT.rgb, offset.a);
+    #endif
+
+    color *= pushConstants.trilinearAlpha;
+
+    #if cp_AlphaTest == 1
+        color.a = round(color.a * 255.0) / 255.0;
+        if (uniformBuffer.cp_AlphaTestValue > color.a)
+            discard;
+        color.a = 1.0;
+    #endif
+
+    #if PASS == PASS_COLOR
+        FragColor = color;
+    #elif PASS == PASS_OIT
+        ivec2 coords = ivec2(gl_FragCoord.xy);
+        uint idx = getNextPixelIndex();
+
+        Pixel pixel;
+        pixel.color = packColors(clamp(color, vec4(0.0), vec4(1.0)));
+        pixel.depth = gl_FragDepth;
+        pixel.seq_num = vtx_index;
+        pixel.next = atomicExchange(abufferPointer.pointers[coords.x + coords.y * uniformBuffer.viewportWidth], idx);
+        PixelBuffer.pixels[idx] = pixel;
+    #endif
+}
+)";
+
+		VulkanSource src;
+		src.addConstant("cp_AlphaTest", (int)params.alphaTest)
+			.addConstant("pp_ClipInside", (int)params.insideClipTest)
+			.addConstant("pp_UseAlpha", (int)params.useAlpha)
+			.addConstant("pp_Texture", (int)params.texture)
+			.addConstant("pp_IgnoreTexA", (int)params.ignoreTexAlpha)
+			.addConstant("pp_ShadInstr", params.shaderInstr)
+			.addConstant("pp_Offset", (int)params.offset)
+			.addConstant("pp_FogCtrl", params.fog)
+			.addConstant("pp_TwoVolumes", (int)params.twoVolume)
+			.addConstant("pp_Gouraud", (int)params.gouraud)
+			.addConstant("pp_BumpMap", (int)params.bumpmap)
+			.addConstant("ColorClamping", (int)params.clamping)
+			.addConstant("pp_Palette", params.palette)
+			.addConstant("DIV_POS_Z", (int)params.divPosZ)
+			.addConstant("PASS", (int)params.pass)
+			.addSource(GouraudSource)
+			.addSource(OITShaderHeader)
+			.addSource(optimizedOITSource);
+
+		DEBUG_LOG(RENDERER, "🚀 Using ALU-optimized OIT fragment shader");
+		return ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment, src.generate());
+	}
+#endif
+#endif
+
+	// Original OIT shader compilation
 	VulkanSource src;
 	src.addConstant("cp_AlphaTest", (int)params.alphaTest)
 		.addConstant("pp_ClipInside", (int)params.insideClipTest)
@@ -771,6 +1073,7 @@ vk::UniqueShaderModule OITShaderManager::compileShader(const FragmentShaderParam
 		.addSource(OITFragmentShaderTop)
 		.addSource(FragmentShaderCommon)
 		.addSource(OITFragmentShaderMain);
+
 	return ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment, src.generate());
 }
 

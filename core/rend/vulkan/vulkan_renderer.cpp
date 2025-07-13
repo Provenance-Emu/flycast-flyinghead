@@ -21,10 +21,19 @@
 #include "vulkan.h"
 #include "vulkan_renderer.h"
 #include "gpu_driven_renderer.h"
-#include "cfg/option.h"
 #include "drawer.h"
 #include "hw/pvr/ta.h"
 #include "rend/transform_matrix.h"
+#include "log/LogManager.h"
+#include <algorithm>
+#include <vector>
+#include <functional>
+
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+#include "texture_streaming_ios.h"
+#endif
+#endif
 
 bool BaseVulkanRenderer::BaseInit(vk::RenderPass renderPass, int subpass)
 {
@@ -110,6 +119,55 @@ void BaseVulkanRenderer::Process(TA_context* ctx)
 	// TODO can't update fog or palette twice in multi render
 	CheckFogTexture();
 	CheckPaletteTexture();
+
+	/// iOS Texture Prefetching: Prefetch textures for next frame
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+	try {
+		auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
+
+		// Collect texture IDs for prefetching
+		std::vector<u32> textureIds;
+		textureIds.reserve(128);
+
+		// Collect from translucent triangles
+		for (const auto& poly : ctx->rend.global_param_tr) {
+			if (poly.texture) {
+				std::string textureId = poly.texture->GetId();
+				textureIds.push_back(std::hash<std::string>{}(textureId));
+			}
+		}
+
+		// Collect from opaque triangles
+		for (const auto& poly : ctx->rend.global_param_op) {
+			if (poly.texture) {
+				std::string textureId = poly.texture->GetId();
+				textureIds.push_back(std::hash<std::string>{}(textureId));
+			}
+		}
+
+		// Collect from punch-through triangles
+		for (const auto& poly : ctx->rend.global_param_pt) {
+			if (poly.texture) {
+				std::string textureId = poly.texture->GetId();
+				textureIds.push_back(std::hash<std::string>{}(textureId));
+			}
+		}
+
+		// Remove duplicates and prefetch
+		if (!textureIds.empty()) {
+			std::sort(textureIds.begin(), textureIds.end());
+			textureIds.erase(std::unique(textureIds.begin(), textureIds.end()), textureIds.end());
+
+			DEBUG_LOG(RENDERER, "🔄 iOS Texture Prefetching: %zu unique textures", textureIds.size());
+			streamingMgr.PrefetchTextures(textureIds);
+		}
+	} catch (const std::exception& e) {
+		DEBUG_LOG(RENDERER, "⚠️ iOS Texture Prefetching error: %s", e.what());
+	}
+#endif
+#endif
+
 	texCommandBuffer.end();
 }
 
@@ -259,6 +317,18 @@ public:
 				g_gpuDrivenRenderer.reset();
 			}
 		}
+
+		/// Initialize iOS Texture Streaming Manager for enhanced performance
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+		try {
+			flycast::IOSTextureStreamingManager::Instance().Initialize();
+			INFO_LOG(RENDERER, "iOS Texture Streaming Manager initialized successfully");
+		} catch (const std::exception& e) {
+			WARN_LOG(RENDERER, "iOS Texture Streaming Manager failed to initialize: %s", e.what());
+		}
+#endif
+#endif
 
 		return true;
 	}

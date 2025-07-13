@@ -19,29 +19,62 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "texture.h"
+#include "log/LogManager.h"
 
 #include <algorithm>
 #include <memory>
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+#if TARGET_OS_IOS || TARGET_OS_TV
+#include "texture_streaming_ios.h"
+#endif
 #endif
 
 #if defined(__ARM_NEON__) || defined(__ARM_NEON)
 #include <arm_neon.h>
 
-/// NEON-optimized texture upload for ARM devices
+/// NEON-optimized texture upload for ARM devices with iOS enhancements
 void optimized_texture_upload(void* dst, const void* src, int width, int height, int bytes_per_pixel, int src_stride, int dst_stride)
 {
     const uint8_t* s = (const uint8_t*)src;
     uint8_t* d = (uint8_t*)dst;
 
     const int row_bytes = width * bytes_per_pixel;
+    const size_t totalSize = height * row_bytes;
 
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+    // Use iOS Texture Streaming Manager for larger textures
+    if (totalSize >= 64 * 1024) { // 64KB threshold
+        try {
+            auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
+
+            // Use streaming manager's optimized copy for large textures
+            flycast::FastMemoryOperations::CopyTextureDataNEON(src, dst, totalSize);
+
+            // If strides don't match, we need row-by-row processing
+            if (src_stride != dst_stride || src_stride != row_bytes) {
+                // Fallback to row-by-row copy for non-matching strides
+                for (int y = 0; y < height; y++) {
+                    flycast::FastMemoryOperations::CopyTextureDataNEON(
+                        s + y * src_stride,
+                        d + y * dst_stride,
+                        row_bytes);
+                }
+            }
+            return;
+        } catch (const std::exception& e) {
+            // Fallback to standard implementation on error
+            DEBUG_LOG(RENDERER, "iOS texture streaming failed, falling back: %s", e.what());
+        }
+    }
+#endif
+#endif
+
+    // Standard NEON implementation for non-iOS or smaller textures
     // If strides match and we can do a single bulk copy
     if (src_stride == dst_stride && src_stride == row_bytes) {
-        const size_t totalSize = height * row_bytes;
-
         // Use NEON for bulk copy when size is large enough and properly aligned
         if (totalSize >= 64 && (totalSize % 32) == 0) {
             const size_t vecSize = totalSize & ~31; // Process 32 bytes at a time
@@ -354,7 +387,42 @@ void Texture::CreateImage(vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk:
 	if (!needsStaging)
 		allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_MAPPED_BIT;
 #else
-	/// iOS memory optimization: use conservative allocation for older devices
+	/// iOS memory optimization: use streaming manager for device-specific allocation
+#if TARGET_OS_IOS || TARGET_OS_TV
+	try {
+		auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
+		auto deviceTier = streamingMgr.GetDeviceTier();
+
+		if (deviceTier == flycast::IOSTextureStreamingManager::DevicePerformanceTier::LOW_PERFORMANCE) {
+			// Conservative allocation for older devices
+			DEBUG_LOG(RENDERER, "🔧 iOS Low Memory: Using conservative texture allocation (%dx%d)", extent.width, extent.height);
+			if (!needsStaging) {
+				allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			}
+		} else if (deviceTier == flycast::IOSTextureStreamingManager::DevicePerformanceTier::HIGH_PERFORMANCE) {
+			// Aggressive allocation for high-performance devices
+			DEBUG_LOG(RENDERER, "🚀 iOS High Performance: Using dedicated texture allocation (%dx%d)", extent.width, extent.height);
+			if (!needsStaging) {
+				allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+			}
+		} else {
+			// Medium performance - balanced approach
+			DEBUG_LOG(RENDERER, "📱 iOS Medium Performance: Using balanced texture allocation (%dx%d)", extent.width, extent.height);
+			if (!needsStaging) {
+				allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			}
+		}
+	} catch (const std::exception& e) {
+		// Fallback to original iOS logic
+		DEBUG_LOG(RENDERER, "iOS streaming manager not available, using fallback: %s", e.what());
+		if (shouldUseConservativeTextureStreaming()) {
+			DEBUG_LOG(RENDERER, "🔧 iOS Low Memory: Using conservative texture allocation (%dx%d)", extent.width, extent.height);
+		} else if (!needsStaging) {
+			allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+		}
+	}
+#else
+	/// Original iOS memory optimization for non-iOS/tvOS Apple platforms
 	if (shouldUseConservativeTextureStreaming()) {
 		// On low-memory devices, avoid dedicated allocation to conserve memory
 		// This helps older iPads with limited RAM avoid memory pressure
@@ -363,6 +431,7 @@ void Texture::CreateImage(vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk:
 		// On higher-memory devices, use dedicated allocation for better performance
 		allocCreateInfo.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 	}
+#endif
 #endif
 	allocation = VulkanContext::Instance()->GetAllocator().AllocateForImage(*image, allocCreateInfo);
 
@@ -398,6 +467,50 @@ void Texture::SetImage(u32 srcSize, const void *srcData, bool isNew, bool genMip
 	else
 		data = allocation.MapMemory();
 	verify(data != nullptr);
+
+	/// iOS Texture Optimization: Apply device-specific optimizations for texture data
+#ifdef __APPLE__
+#if TARGET_OS_IOS || TARGET_OS_TV
+	try {
+		auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
+
+		// Check if we should apply iOS optimizations for larger textures
+		if (srcSize >= 32 * 1024 && extent.width >= 64 && extent.height >= 64) {
+			// Create TextureData structure for streaming manager
+			flycast::IOSTextureStreamingManager::TextureData textureData;
+			textureData.data = const_cast<void*>(srcData);
+			textureData.width = extent.width;
+			textureData.height = extent.height;
+
+			// Determine format based on texture type
+			switch (tex_type) {
+				case TextureType::_8888:
+					textureData.format = flycast::IOSTextureStreamingManager::TextureFormat::RGBA8;
+					break;
+				case TextureType::_565:
+				case TextureType::_4444:
+				case TextureType::_5551:
+					textureData.format = flycast::IOSTextureStreamingManager::TextureFormat::RGBA8;
+					break;
+				case TextureType::_8:
+					textureData.format = flycast::IOSTextureStreamingManager::TextureFormat::RGBA8;
+					break;
+				default:
+					textureData.format = flycast::IOSTextureStreamingManager::TextureFormat::RGBA8;
+					break;
+			}
+
+			// Apply device-specific optimizations
+			streamingMgr.OptimizeTextureForDevice(textureData);
+
+			DEBUG_LOG(RENDERER, "iOS: Applied texture optimization for %dx%d texture (size: %u KB)",
+					  extent.width, extent.height, srcSize / 1024);
+		}
+	} catch (const std::exception& e) {
+		DEBUG_LOG(RENDERER, "iOS texture optimization failed: %s", e.what());
+	}
+#endif
+#endif
 
 	if (mipmapLevels > 1 && !genMipmaps && tex_type != TextureType::_8888)
 	{

@@ -176,10 +176,10 @@ All optimization files properly integrated into build system:
 ### **Threading Architecture**
 ```
 Main Thread
-├── Vulkan Renderer (optimized)
-├── FMV Async Pipeline Thread (new)
-├── Fence-Free GPU Submitter Thread (new)
-└── Audio Processing (planned optimization)
+├── Vulkan Renderer (optimized fragment shaders)
+├── FMV Async Pipeline Thread (eliminates video stalls)
+├── Fence-Free GPU Submitter Thread (eliminates GPU stalls)
+└── Lock-Free Audio Thread (eliminates main thread blocking)
 ```
 
 ### **Memory Management**

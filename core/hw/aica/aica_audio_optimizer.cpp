@@ -44,14 +44,9 @@ void AICAAudioOptimizer::Init() {
 #ifdef TARGET_IPHONE
     enabled = true;
 
-    // Try to initialize threading
-    if (InitThreading()) {
-        threaded_mode = true;
-        INFO_LOG(AUDIO, "AICA Audio Optimizer: Lock-free threaded processing enabled for maximum FMV performance");
-    } else {
-        threaded_mode = false;
-        INFO_LOG(AUDIO, "AICA Audio Optimizer: Basic optimization enabled (threading unavailable)");
-    }
+    // Disable threading to maintain proper audio timing and prevent chipmunk audio
+    threaded_mode = false;
+    INFO_LOG(AUDIO, "AICA Audio Optimizer: Basic optimization enabled (threading disabled for proper timing)");
 
     // Reset performance counters
     ResetAudioOptimizationStats();
@@ -225,22 +220,22 @@ void AICAAudioOptimizer::ProcessChannelsOptimized(SampleType& mixl, SampleType& 
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    if (threaded_mode && thread_running.load()) {
+    // FIXED: Only process audio once, not both threaded AND synchronous
+    // Disable threaded mode during FMVs to maintain proper timing
+    if (false && threaded_mode && thread_running.load()) {
+        // Threaded processing disabled to fix chipmunk audio in FMVs
         // Try to queue for threaded processing
         if (QueueAudioProcessing(mixl, mixr)) {
             // Successfully queued, process any completed results
             ProcessQueuedAudio();
-
-            // For now, also do synchronous processing to maintain compatibility
-            // In a full implementation, this would be purely asynchronous
-            ProcessChannelsFast(mixl, mixr);
+            // Do NOT also do synchronous processing - this was causing double processing!
         } else {
             // Queue full, fall back to synchronous processing
             ProcessChannelsFast(mixl, mixr);
             GetThreadedStats().buffer_overruns.fetch_add(1);
         }
     } else {
-        // Use the synchronous fast processing path
+        // Use the synchronous fast processing path - this maintains proper timing
         ProcessChannelsFast(mixl, mixr);
     }
 
@@ -294,12 +289,13 @@ std::pair<SampleType*, SampleType*> AICAAudioOptimizer::GetBufferPair() {
 }
 
 void AICAAudioOptimizer::ProcessChannelsFast(SampleType& mixl, SampleType& mixr) {
-    // For now, delegate to the standard implementation
-    // In the future, this could contain optimized processing logic
+    // Use standard implementation with proper timing - this maintains correct sample rate
+    // The "fast" aspect comes from reduced function call overhead and stats tracking
     aica::sgc::audio::StepAllChannels(mixl, mixr);
 
+    // Update performance stats (minimal overhead)
     stats.optimizations_active = true;
-    stats.threaded_processing_active = threaded_mode && thread_running.load();
+    stats.threaded_processing_active = false; // Disabled to fix timing
     stats.lock_free_operations = GetThreadedStats().requests_processed.load();
 }
 

@@ -26,6 +26,7 @@ else
 fi
 
 export VULKAN_SDK="${HOME}/VulkanSDK/macOS"
+export PATH="/opt/homebrew/bin:$PATH"
 
 # Initialize FMV-optimized flags (Core Clang optimizations only)
 C_FLAGS="-arch ${ARCH} \

@@ -41,6 +41,15 @@ union fp_20_12
 
 typedef s32 SampleType;
 
+// Forward declaration for audio optimization
+struct ChannelEx;
+
+// Audio processing functions
+namespace audio {
+    void ProcessChannelsOptimized(SampleType& mixl, SampleType& mixr);
+    void StepAllChannels(SampleType& mixl, SampleType& mixr);
+}
+
 void ReadCommonReg(u32 reg, bool byte);
 void serialize(Serializer& ctx);
 void deserialize(Deserializer& ctx);

@@ -897,7 +897,9 @@ target_sources(${PROJECT_NAME} PRIVATE
 		core/hw/aica/aica_if.cpp
 		core/hw/aica/aica_if.h
 		core/hw/aica/aica_mem.cpp
-		core/hw/aica/aica_mem.h
+core/hw/aica/aica_mem.h
+core/hw/aica/aica_audio_optimizer.cpp
+core/hw/aica/aica_audio_optimizer.h
 		core/hw/aica/dsp.cpp
 		core/hw/aica/dsp.h
 		core/hw/aica/dsp_arm32.cpp

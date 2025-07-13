@@ -12,10 +12,10 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmake")
 
 if(APPLE)
 	if(CMAKE_SYSTEM_NAME STREQUAL iOS)
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum iOS deployment version")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum iOS deployment version")
 		set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
 	elseif(CMAKE_SYSTEM_NAME STREQUAL tvOS)
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum tvOS deployment version")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum tvOS deployment version")
 		set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
 	else()
 		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS deployment version")
@@ -950,6 +950,9 @@ target_sources(${PROJECT_NAME} PRIVATE
 		core/hw/maple/maple_jvs.cpp
 		core/hw/mem/addrspace.cpp
 		core/hw/mem/addrspace.h
+		core/hw/mem/addrspace_optimized.h
+		core/hw/mem/addrspace_optimized.cpp
+		core/hw/mem/cache_optimized_structures.h
 		core/hw/mem/mem_watch.cpp
 		core/hw/mem/mem_watch.h
 		core/hw/modem/modem.cpp
@@ -1478,11 +1481,15 @@ if(USE_VULKAN)
 		target_sources(${PROJECT_NAME} PRIVATE
 				core/rend/vulkan/texture_streaming_ios.cpp
 				core/rend/vulkan/texture_streaming_ios.h
-				core/hw/pvr/ta_neon_optimizations.h)
+				core/hw/pvr/ta_neon_optimizations.h
+				core/hw/mem/addrspace_optimized.h
+				core/hw/mem/addrspace_optimized.cpp
+				core/hw/mem/cache_optimized_structures.h)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE
 				IOS_VULKAN_OPTIMIZATIONS
 				ENABLE_IOS_TEXTURE_STREAMING
-				ENABLE_TA_NEON_OPTIMIZATIONS)
+				ENABLE_TA_NEON_OPTIMIZATIONS
+				ENABLE_MEMORY_OPTIMIZATIONS)
 	endif()
 
 	if(LIBRETRO)

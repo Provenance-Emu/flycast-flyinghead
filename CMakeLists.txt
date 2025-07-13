@@ -1482,6 +1482,7 @@ if(USE_VULKAN)
 				core/rend/vulkan/texture_streaming_ios.cpp
 				core/rend/vulkan/texture_streaming_ios.h
 				core/hw/pvr/ta_neon_optimizations.h
+				core/hw/pvr/ta_neon_optimizations.cpp
 				core/hw/mem/addrspace_optimized.h
 				core/hw/mem/addrspace_optimized.cpp
 				core/hw/mem/cache_optimized_structures.h)

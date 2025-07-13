@@ -32,6 +32,7 @@
 #ifdef __APPLE__
 #if TARGET_OS_IOS || TARGET_OS_TV
 #include "texture_streaming_ios.h"
+#include "hw/pvr/ta_neon_optimizations.h"
 #endif
 #endif
 
@@ -322,10 +323,17 @@ public:
 #ifdef __APPLE__
 #if TARGET_OS_IOS || TARGET_OS_TV
 		try {
-			flycast::IOSTextureStreamingManager::Instance().Initialize();
-			INFO_LOG(RENDERER, "iOS Texture Streaming Manager initialized successfully");
+			auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
+			streamingMgr.Initialize();
+			INFO_LOG(RENDERER, "🔧 iOS Texture Streaming Manager initialized successfully");
+
+			// Initialize NEON TA processor for FMV and scene loading optimizations
+			flycast::NEONTAProcessor::Initialize();
+			flycast::NEONPerfMonitor::Initialize();
+
 		} catch (const std::exception& e) {
-			WARN_LOG(RENDERER, "iOS Texture Streaming Manager failed to initialize: %s", e.what());
+			WARN_LOG(RENDERER, "⚠️ iOS optimization initialization failed: %s", e.what());
+			g_gpuDrivenRenderer.reset();
 		}
 #endif
 #endif

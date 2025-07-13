@@ -28,6 +28,7 @@
 #include <sys/sysctl.h>
 #if TARGET_OS_IOS || TARGET_OS_TV
 #include "texture_streaming_ios.h"
+#include "hw/pvr/ta_neon_optimizations.h"
 #endif
 #endif
 
@@ -51,22 +52,13 @@ void optimized_texture_upload(void* dst, const void* src, int width, int height,
             auto& streamingMgr = flycast::IOSTextureStreamingManager::Instance();
 
             // Use streaming manager's optimized copy for large textures
-            flycast::FastMemoryOperations::CopyTextureDataNEON(src, dst, totalSize);
-
-            // If strides don't match, we need row-by-row processing
-            if (src_stride != dst_stride || src_stride != row_bytes) {
-                // Fallback to row-by-row copy for non-matching strides
-                for (int y = 0; y < height; y++) {
-                    flycast::FastMemoryOperations::CopyTextureDataNEON(
-                        s + y * src_stride,
-                        d + y * dst_stride,
-                        row_bytes);
-                }
-            }
+            // Use NEON-optimized memory operations for faster copying
+            flycast::NEONMemOps::MemcpyNEON(dst, src, totalSize);
+            DEBUG_LOG(RENDERER, "🚀 iOS NEON: Fast copy for %dx%d texture (%zu KB)",
+                     width, height, totalSize / 1024);
             return;
         } catch (const std::exception& e) {
-            // Fallback to standard implementation on error
-            DEBUG_LOG(RENDERER, "iOS texture streaming failed, falling back: %s", e.what());
+            DEBUG_LOG(RENDERER, "⚠️ iOS NEON copy failed, using fallback: %s", e.what());
         }
     }
 #endif
@@ -505,6 +497,21 @@ void Texture::SetImage(u32 srcSize, const void *srcData, bool isNew, bool genMip
 
 			DEBUG_LOG(RENDERER, "iOS: Applied texture optimization for %dx%d texture (size: %u KB)",
 					  extent.width, extent.height, srcSize / 1024);
+		}
+		// Use streaming manager's optimized copy for large textures
+		if (srcSize >= 32 * 1024) { // 32KB threshold for TA optimizations
+			try {
+				// Use NEON-optimized TA data copy for large texture operations
+				flycast::NEONTAProcessor::CopyTADataNEON(data, srcData, srcSize);
+				DEBUG_LOG(RENDERER, "🔧 iOS NEON TA: Optimized copy for %u KB texture data", srcSize / 1024);
+			} catch (const std::exception& e) {
+				DEBUG_LOG(RENDERER, "⚠️ iOS NEON TA copy failed, using standard copy: %s", e.what());
+				// Fall back to standard copy
+				memcpy(data, srcData, srcSize);
+			}
+		} else {
+			// Use standard copy for smaller textures
+			memcpy(data, srcData, srcSize);
 		}
 	} catch (const std::exception& e) {
 		DEBUG_LOG(RENDERER, "iOS texture optimization failed: %s", e.what());

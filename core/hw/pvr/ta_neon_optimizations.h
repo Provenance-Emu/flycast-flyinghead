@@ -8,8 +8,13 @@
 #if (TARGET_OS_IOS || TARGET_OS_TV) && defined(__ARM_NEON__)
 
 #include <arm_neon.h>
+#include <vector>
+#include <unordered_map>
+#include <mutex>
 #include "ta.h"
 #include "ta_ctx.h"
+#include "deps/glm/glm/glm.hpp"
+#include "deps/glm/glm/gtc/matrix_transform.hpp"
 
 namespace flycast {
 

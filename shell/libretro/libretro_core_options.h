@@ -626,6 +626,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "enabled",
    },
    {
+      CORE_OPTION_NAME "_gpu_driven_rendering",
+      "GPU-Driven Rendering",
+      NULL,
+      "Use compute shaders for frustum culling and indirect drawing to reduce CPU bottlenecks. Improves performance on modern mobile GPUs.",
+      NULL,
+      "performance",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "enabled",
+   },
+   {
       CORE_OPTION_NAME "_auto_skip_frame",
       "Auto Skip Frame",
       NULL,

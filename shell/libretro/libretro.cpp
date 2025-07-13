@@ -87,7 +87,7 @@ constexpr char slash = path_default_slash_c();
 
 #define RETRO_ENVIRONMENT_POLL_TYPE_OVERRIDE (4 | RETRO_ENVIRONMENT_RETROARCH_START_BLOCK)
                                             /* unsigned * --
-                                            * Tells the frontend to override the poll type behavior. 
+                                            * Tells the frontend to override the poll type behavior.
                                             * Allows the frontend to influence the polling behavior of the
                                             * frontend.
                                             *
@@ -313,7 +313,7 @@ void retro_init()
 {
 	first_run = true;
 	memset(device_type, -1, sizeof(device_type));
-	
+
 	static bool emuInited;
 
 	// Logging
@@ -382,7 +382,7 @@ void retro_deinit()
 		std::lock_guard<std::mutex> lock(mtx_serialization);
 	}
 	os_UninstallFaultHandler();
-	
+
 #if defined(__APPLE__) || (defined(__GNUC__) && defined(__linux__) && !defined(__ANDROID__))
 	addrspace::release();
 #else
@@ -846,6 +846,17 @@ static void update_variables(bool first_startup)
 		rend_term_renderer();
 		rend_init_renderer();
 	}
+
+	var.key = CORE_OPTION_NAME "_gpu_driven_rendering";
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+	{
+		if (!strcmp("enabled", var.value))
+			config::GpuDrivenRendering = true;
+		else if (!strcmp("disabled", var.value))
+			config::GpuDrivenRendering = false;
+	}
+	else
+		config::GpuDrivenRendering = true;  // Default to enabled
 
 #if defined(HAVE_OIT) || defined(HAVE_VULKAN) || defined(HAVE_D3D11)
 	var.key = CORE_OPTION_NAME "_oit_abuffer_size";
@@ -3063,9 +3074,9 @@ static void UpdateInputState(u32 port)
 			setDeviceButtonStateDirect(ret, port, RETRO_DEVICE_ID_JOYPAD_A, DC_BTN_B );
 			setDeviceButtonStateDirect(ret, port, RETRO_DEVICE_ID_JOYPAD_Y, DC_BTN_X );
 			setDeviceButtonStateDirect(ret, port, RETRO_DEVICE_ID_JOYPAD_X, DC_BTN_Y );
-			setDeviceButtonStateDirect2(ret, port, RETRO_DEVICE_ID_JOYPAD_L, 
+			setDeviceButtonStateDirect2(ret, port, RETRO_DEVICE_ID_JOYPAD_L,
 			                                       RETRO_DEVICE_ID_JOYPAD_L2, DC_BTN_Z );
-			setDeviceButtonStateDirect2(ret, port, RETRO_DEVICE_ID_JOYPAD_R, 
+			setDeviceButtonStateDirect2(ret, port, RETRO_DEVICE_ID_JOYPAD_R,
 			                                       RETRO_DEVICE_ID_JOYPAD_R2, DC_BTN_C );
 			setDeviceButtonStateDirect(ret, port, RETRO_DEVICE_ID_JOYPAD_START, DC_BTN_START );
 
@@ -3081,7 +3092,7 @@ static void UpdateInputState(u32 port)
 		{
 			int16_t ret = 0;
 			kcode[port] = 0xFFFF; // active-low
-			
+
 			if ( device_type[port] == RETRO_DEVICE_TWINSTICK_SATURN )
 			{
 				// NOTE: This is a remapping of the RetroPad layout in the block below to make using a real

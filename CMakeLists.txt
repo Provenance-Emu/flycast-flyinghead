@@ -1454,6 +1454,8 @@ if(USE_VULKAN)
 			core/rend/vulkan/compiler.h
 			core/rend/vulkan/drawer.cpp
 			core/rend/vulkan/drawer.h
+			core/rend/vulkan/gpu_driven_renderer.cpp
+			core/rend/vulkan/gpu_driven_renderer.h
 			core/rend/vulkan/pipeline.cpp
 			core/rend/vulkan/pipeline.h
 			core/rend/vulkan/quad.cpp

@@ -233,7 +233,7 @@ struct rend_context
 
 	bool isRTT;
 	bool clearFramebuffer;
-	
+
 	TA_GLOB_TILE_CLIP_type ta_GLOB_TILE_CLIP;
 	SCALER_CTL_type scaler_ctl;
 	FB_X_CLIP_type fb_X_CLIP;
@@ -243,7 +243,7 @@ struct rend_context
 	FB_W_CTRL_type fb_W_CTRL;
 	u32 framebufferWidth;
 	u32 framebufferHeight;
-	
+
 	RGBAColor fog_clamp_min;
 	RGBAColor fog_clamp_max;
 
@@ -339,7 +339,7 @@ struct TA_context
 			recv:   idx: 33528, vtx: 23451, op: 128, pt: 4, tr: 133, mvo: 14, modt: 342
 			sc:     idx: 26150, vtx: 17417, op: 162, pt: 12, tr: 244, mvo: 6, modt: 2044
 			doa2le: idx: 47178, vtx: 34046, op: 868, pt: 0, tr: 354, mvo: 92, modt: 976 (overruns)
-			ika:    idx: 46748, vtx: 33818, op: 984, pt: 9, tr: 234, mvo: 10, modt: 16, ov: 0  
+			ika:    idx: 46748, vtx: 33818, op: 984, pt: 9, tr: 234, mvo: 10, modt: 16, ov: 0
 			ct:     idx: 30920, vtx: 21468, op: 752, pt: 0, tr: 360, mvo: 101, modt: 732, ov: 0
 			sa2:    idx: 36094, vtx: 24520, op: 1330, pt: 10, tr: 177, mvo: 39, modt: 360, ov: 0
 	*/
@@ -394,6 +394,7 @@ extern tad_context ta_tad;
 TA_context* tactx_Pop(u32 addr);
 void tactx_Term();
 TA_context *tactx_Alloc();
+void tactx_Init(); // Initialize preallocated pool for hitch-free gameplay
 
 /*
 	Ta Context

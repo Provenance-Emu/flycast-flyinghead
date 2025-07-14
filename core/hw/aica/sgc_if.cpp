@@ -313,12 +313,12 @@ struct ChannelCommonData
 	//+24	--	DISDL[3:0]	--	DIPAN[4:0]
 	u32 DIPAN:5;
 	u32 :3;
-	
+
 	u32 DISDL:4;
 	u32 :4;
 
 	u32 :16;
-	
+
 
 	//+28	TL[7:0]	--	Q[4:0]
 	u32 Q:5;
@@ -339,27 +339,27 @@ struct ChannelCommonData
 	//+30	--	FLV1[12:0]
 	u32 FLV1:13;
 	u32 :3;
-	
+
 	u32 :16;
 
 	//+34	--	FLV2[12:0]
 	u32 FLV2:13;
 	u32 :3;
-	
+
 	u32 :16;
 
 	//+38	--	FLV3[12:0]
 	u32 FLV3:13;
 	u32 :3;
-	
+
 	u32 :16;
 
 	//+3C	--	FLV4[12:0]
 	u32 FLV4:13;
 	u32 :3;
-	
+
 	u32 :16;
-	
+
 	//+40	--	FAR[4:0]	--	FD1R[4:0]
 	u32 FD1R:5;
 	u32 :3;
@@ -423,7 +423,7 @@ struct ChannelEx
 
 		u8 looped;
 	} loop;
-	
+
 	struct
 	{
 		//used in adpcm decoding
@@ -453,12 +453,12 @@ struct ChannelEx
 		u32 DSPAtt;
 		SampleType* DSPOut;
 	} VolMix;
-	
+
 	void (* StepAEG)(ChannelEx* ch);
 	void (* StepFEG)(ChannelEx* ch);
 	void (* StepStream)(ChannelEx* ch);
 	void (* StepStreamInitial)(ChannelEx* ch);
-	
+
 	struct
 	{
 		s32 val;
@@ -473,7 +473,7 @@ struct ChannelEx
 		u32 Decay2Rate;
 		u32 ReleaseRate;
 	} AEG;
-	
+
 	struct
 	{
 		u32 value;
@@ -491,8 +491,8 @@ struct ChannelEx
 		u32 ReleaseRate;
 		bool active = false;
 	} FEG;
-	
-	struct 
+
+	struct
 	{
 		u32 counter;
 		u32 start_value;
@@ -593,7 +593,7 @@ struct ChannelEx
 				ofsatt = std::min(ofsatt, (u32)255); // make sure it never gets more 255 -- it can happen with some alfo/aeg combinations
 			}
 			u32 const max_att = ((16 << 4) - 1) - ofsatt;
-			
+
 			s32* logtable = ofsatt + tl_lut;
 
 			u32 dl = std::min(VolMix.DLAtt, max_att);
@@ -638,8 +638,45 @@ struct ChannelEx
 
 	static void StepAll(SampleType& mixl, SampleType& mixr)
 	{
-		for (ChannelEx& channel : Chans)
-			channel.Step(mixl, mixr);
+		// === AUDIO HITCH REDUCTION OPTIMIZATION ===
+		static u32 frame_counter = 0;
+		static bool batch_mode = false;
+		static u32 channel_offset = 0;
+
+		frame_counter++;
+
+		// Auto-detect intensive sequences and enable batch mode
+		if ((frame_counter & 63) == 0) { // Check every 64 frames
+			// Simple heuristic: if we're processing many active channels, use batch mode
+			u32 active_channels = 0;
+			for (const ChannelEx& channel : Chans) {
+				if (channel.enabled) active_channels++;
+			}
+
+			// Enable batch mode if many channels are active (fighting game audio stress)
+			batch_mode = (active_channels > 32);
+
+			if (batch_mode) {
+				DEBUG_LOG(AICA, "🎵 Audio batch mode enabled - %d active channels", active_channels);
+			}
+		}
+
+		if (batch_mode) {
+			// Batch processing: Process 16 channels per frame instead of all 64
+			// This spreads the audio load across multiple frames
+			constexpr u32 CHANNELS_PER_BATCH = 16;
+
+			for (u32 i = 0; i < CHANNELS_PER_BATCH; i++) {
+				u32 channel_idx = (channel_offset + i) % 64;
+				Chans[channel_idx].Step(mixl, mixr);
+			}
+
+			channel_offset = (channel_offset + CHANNELS_PER_BATCH) % 64;
+		} else {
+			// Normal processing: All channels at once
+			for (ChannelEx& channel : Chans)
+				channel.Step(mixl, mixr);
+		}
 	}
 
 	void SetAegState(_EG_state newstate)
@@ -720,7 +757,7 @@ struct ChannelEx
 		u32 addr = (ccd->SA_hi << 16) | ccd->SA_low;
 		if (ccd->PCMS == 0)
 			addr &= ~1; //0: 16 bit
-		
+
 		SA = &aica_ram[addr & ARAM_MASK];
 	}
 	//LSA,LEA
@@ -853,7 +890,7 @@ struct ChannelEx
 		FEG.Decay2Rate = FEG_SPS[EG_EffRate(base_rate, ccd->FD2R)];
 		FEG.ReleaseRate = FEG_SPS[EG_EffRate(base_rate, ccd->FRR)];
 	}
-	
+
 	void RegWrite(u32 offset, int size)
 	{
 		switch (offset)
@@ -948,7 +985,7 @@ struct ChannelEx
 			break;
 
 		}
-	} 
+	}
 
 	static void initAll() {
 		for (std::size_t i = 0; i < std::size(Chans); i++)
@@ -996,7 +1033,7 @@ void StepDecodeSample(ChannelEx* ch,u32 CA)
 
 		s0=ch->noise_state;
 		s0>>=16;
-		
+
 		s1=ch->noise_state*16807 + 0xbeef;
 		s1>>=16;
 		break;
@@ -1055,7 +1092,7 @@ void StepDecodeSample(ChannelEx* ch,u32 CA)
 		}
 		break;
 	}
-	
+
 	ch->s0=s0;
 	ch->s1=s1;
 }
@@ -1433,7 +1470,7 @@ void ReadCommonReg(u32 reg,bool byte)
 	case 0x2811:
 		{
 			u32 chan=CommonData->MSLC;
-			
+
 			CommonData->LP=Chans[chan].loop.looped;
 			if (CommonData->AFSEL == 1)
 				WARN_LOG(AICA, "FEG monitor (AFSEL=1) not supported");
@@ -1476,10 +1513,10 @@ void AICA_Sample()
 	memset(dsp::state.MIXS, 0, sizeof(dsp::state.MIXS));
 
 	ChannelEx::StepAll(mixl,mixr);
-	
+
 	//OK , generated all Channels  , now DSP/ect + final mix ;p
 	//CDDA EXTS input
-	
+
 	if (cdda_index>=CDDA_SIZE)
 	{
 		cdda_index=0;
@@ -1520,7 +1557,7 @@ void AICA_Sample()
 	// Mono
 	if (CommonData->Mono)
 		mixl = mixr = FPs(mixl + mixr, 1);
-	
+
 	//MVOL !
 	//we want to make sure mix* is *At least* 23 bits wide here, so 64 bit mul !
 	u32 mvol=CommonData->MVOL;

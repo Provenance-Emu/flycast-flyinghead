@@ -55,6 +55,7 @@ void init()
 {
 	spg_Init();
 	elan::init();
+	tactx_Init(); // Initialize preallocated texture context pool
 }
 
 void term()

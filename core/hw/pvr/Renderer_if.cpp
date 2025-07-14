@@ -57,19 +57,33 @@ public:
 		FramebufferInfo config;
 	};
 
+	// === FRAME TIMING HITCH REDUCTION ===
+	static constexpr size_t MAX_QUEUE_SIZE = 3; // Limit queue depth to prevent frame stacking
+	static constexpr size_t PRIORITY_QUEUE_SIZE = 1; // Reserve space for high-priority frames
+
 	void enqueue(MessageType type, FramebufferInfo config = FramebufferInfo())
 	{
 		Message msg { type, config };
 		if (config::ThreadedRendering)
 		{
-			// FIXME need some synchronization to avoid blinking in densha de go
-			// or use !threaded rendering for emufb?
-			// or read framebuffer vram on emu thread
 			bool dupe;
 			do {
 				dupe = false;
 				{
 					const lock_guard lock(mutex);
+
+					// === HITCH PREVENTION: Queue depth limiting ===
+					if (queue.size() >= MAX_QUEUE_SIZE && type != Stop) {
+						// Remove oldest non-critical messages to prevent frame stacking
+						for (auto it = queue.begin(); it != queue.end(); ++it) {
+							if (it->type == Render && queue.size() > PRIORITY_QUEUE_SIZE) {
+								DEBUG_LOG(PVR, "🎮 Dropping queued frame to prevent timing hitch");
+								queue.erase(it);
+								break;
+							}
+						}
+					}
+
 					for (const auto& m : queue)
 						if (m.type == type) {
 							dupe = true;

@@ -36,7 +36,7 @@ void SetCurrentTARC(u32 addr)
 		//Flush cache to context
 		verify(ta_ctx != 0);
 		ta_ctx->tad=ta_tad;
-		
+
 		//clear context
 		ta_ctx=0;
 		ta_tad.Reset(0);
@@ -49,7 +49,7 @@ static cResetEvent frame_finished;
 bool QueueRender(TA_context* ctx)
 {
 	verify(ctx != 0);
-	
+
 	bool skipFrame = !rend_is_enabled();
 	if (!skipFrame)
 	{
@@ -106,11 +106,37 @@ using Lock = std::lock_guard<std::mutex>;
 static std::vector<TA_context*> ctx_pool;
 static std::vector<TA_context*> ctx_list;
 
+// === AGGRESSIVE TEXTURE CONTEXT POOLING ===
+static std::vector<TA_context*> preallocated_pool;
+static bool pool_initialized = false;
+
+static void EnsurePreallocatedPool() {
+	if (pool_initialized) return;
+
+	// Pre-allocate 8 contexts to avoid allocation hitches during fighting games
+	preallocated_pool.reserve(8);
+	for (int i = 0; i < 8; i++) {
+		TA_context* ctx = new TA_context();
+		ctx->Alloc();
+		preallocated_pool.push_back(ctx);
+	}
+	pool_initialized = true;
+	INFO_LOG(PVR, "🚀 Pre-allocated 8 texture contexts for hitch-free gameplay");
+}
+
 TA_context *tactx_Alloc()
 {
 	TA_context *ctx = nullptr;
 	{
 		Lock _(mtx_pool);
+
+		// Try preallocated pool first (guaranteed no allocation)
+		if (!preallocated_pool.empty()) {
+			ctx = preallocated_pool.back();
+			preallocated_pool.pop_back();
+			return ctx;
+		}
+
 		if (!ctx_pool.empty()) {
 			ctx = ctx_pool.back();
 			ctx_pool.pop_back();
@@ -118,6 +144,8 @@ TA_context *tactx_Alloc()
 	}
 
 	if (ctx == nullptr) {
+		// Emergency allocation - should be rare if pool is sized correctly
+		WARN_LOG(PVR, "⚠️ Emergency texture context allocation - consider increasing pool size");
 		ctx = new TA_context();
 		ctx->Alloc();
 	}
@@ -129,6 +157,14 @@ static void tactx_Recycle(TA_context* ctx)
 	if (ctx->nextContext != nullptr)
 		tactx_Recycle(ctx->nextContext);
 	Lock _(mtx_pool);
+
+	// Prioritize preallocated pool for instant reuse
+	if (preallocated_pool.size() < 8) {
+		ctx->Reset();
+		preallocated_pool.push_back(ctx);
+		return;
+	}
+
 	if (ctx_pool.size() > 3) {
 		delete ctx;
 	}
@@ -136,6 +172,11 @@ static void tactx_Recycle(TA_context* ctx)
 		ctx->Reset();
 		ctx_pool.push_back(ctx);
 	}
+}
+
+void tactx_Init()
+{
+	EnsurePreallocatedPool();
 }
 
 static TA_context *tactx_Find(u32 addr, bool allocnew)
@@ -179,7 +220,7 @@ TA_context *tactx_Pop(u32 addr)
 		if (ctx_list[i]->Address == addr)
 		{
 			TA_context *ctx = ctx_list[i];
-			
+
 			if (::ta_ctx == ctx)
 				SetCurrentTARC(TACTX_NONE);
 

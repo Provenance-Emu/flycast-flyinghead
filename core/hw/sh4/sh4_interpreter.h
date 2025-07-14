@@ -18,6 +18,10 @@ public:
 	void ExecuteDelayslot_RTE();
 	Sh4Context *getContext() { return ctx; }
 
+	/// Toggle simplified cycle mode for performance testing
+	static void SetSimplifiedCycleMode(bool enabled);
+	static bool GetSimplifiedCycleMode();
+
 	static Sh4Interpreter *Instance;
 
 protected:

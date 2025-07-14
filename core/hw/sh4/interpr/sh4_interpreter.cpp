@@ -17,6 +17,7 @@
 #include "build.h"
 #include "hw/sh4/modules/mmu.h"
 #include "hw/mem/addrspace.h"
+#include "sh4_fast_mem.h"
 
 #include <array>
 #include <algorithm>
@@ -262,12 +263,23 @@ s32 FastReadMemS16_Interp(u32 addr) {
 // Global cache instance
 static OptimizedInstructionCache g_instruction_cache;
 
+// === SIMPLIFIED CYCLE MODE ===
+/// Global flag to enable/disable simplified cycle calculations
+bool g_simplified_cycles_enabled = false;
+
 void Sh4Interpreter::ExecuteOpcode(u16 op)
 {
 	if (ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint())
 		throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
 	OpPtr[op](ctx, op);
-	sh4cycles.executeCycles(op);
+
+	// Use simplified cycle mode if enabled, otherwise use complex calculations
+	if (__builtin_expect(g_simplified_cycles_enabled, 1)) {
+		u8 cycles = FastCalculateInstructionCycles(op);
+		ctx->cycle_counter -= cycles;
+	} else {
+		sh4cycles.executeCycles(op);
+	}
 }
 
 u16 Sh4Interpreter::ReadNexOp()
@@ -505,7 +517,10 @@ void Sh4Interpreter::Reset(bool hard)
 	g_performance_mode_timer = 0;
 	g_in_performance_mode = false;
 
-	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching and adaptive execution enabled");
+	// Enable simplified cycle mode by default for better FMV performance
+	g_simplified_cycles_enabled = true;
+
+	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, and simplified cycle mode enabled");
 }
 
 bool Sh4Interpreter::IsCpuRunning()
@@ -581,6 +596,7 @@ void Sh4Interpreter::ResetCache()
 	g_last_pc = 0;
 	g_performance_mode_timer = 0;
 	g_in_performance_mode = false;
+	g_simplified_cycles_enabled = true; // Enable simplified cycles by default
 }
 
 void Sh4Interpreter::Init()
@@ -597,6 +613,18 @@ void Sh4Interpreter::Term()
 {
 	Stop();
 	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter Term");
+}
+
+/// Toggle simplified cycle mode for performance testing
+void Sh4Interpreter::SetSimplifiedCycleMode(bool enabled)
+{
+	g_simplified_cycles_enabled = enabled;
+	INFO_LOG(INTERPRETER, "Simplified cycle mode %s", enabled ? "enabled" : "disabled");
+}
+
+bool Sh4Interpreter::GetSimplifiedCycleMode()
+{
+	return g_simplified_cycles_enabled;
 }
 
 Sh4Executor *Get_Sh4Interpreter()

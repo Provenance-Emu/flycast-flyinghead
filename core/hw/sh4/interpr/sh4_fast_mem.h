@@ -23,6 +23,33 @@ s32 FastReadMemS16_Interp(u32 addr);
 static constexpr u8 FAST_READ_CYCLES = 2;
 static constexpr u8 FAST_WRITE_CYCLES = 2;
 
+/// Simplified cycle mode - bypass expensive instruction cycle calculations
+/// Enable/disable with global flag for testing
+extern bool g_simplified_cycles_enabled;
+
+/// Fast cycle calculation with simple pattern-based estimates
+inline u8 FastCalculateInstructionCycles(u16 op) {
+    // Simple pattern-based cycle estimates for common operations
+    switch (op & 0xF000) {
+        case 0x6000: // MOV operations
+            if ((op & 0x000F) <= 0x0003) return 2; // Memory moves
+            return 1; // Register moves
+        case 0x2000: // Store operations
+            return 2;
+        case 0x8000: // Conditional branches
+        case 0xA000: // Unconditional branches
+        case 0xB000: // BSR/JSR
+            return 2;
+        case 0xF000: // Floating point
+            return 3;
+        case 0x4000: // Complex operations
+            if ((op & 0x00FF) >= 0x20 && (op & 0x00FF) <= 0x2B) return 3; // MUL/MAC
+            return 2;
+        default:
+            return 1; // ALU, immediate ops
+    }
+}
+
 // Fast memory access macros with simplified cycle accounting
 #define FAST_READ_MEM_U32(to, addr) \
     do { \

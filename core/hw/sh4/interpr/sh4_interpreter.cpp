@@ -291,6 +291,151 @@ alignas(64) FusionCacheEntry g_fusion_cache[32];
 u32 g_fusion_hits = 0;
 u32 g_fusion_misses = 0;
 
+// === HOT PATH SPECIALIZATION ===
+/// Global flag to enable/disable hot path specialization
+bool g_hot_path_specialization_enabled = false;
+
+/// Hot path pattern cache for detecting common sequences
+struct HotPathEntry {
+    u32 pc;                    // Starting PC of the pattern
+    u16 pattern[4];           // Up to 4 consecutive instructions
+    u8 pattern_length;        // Length of the pattern (1-4)
+    u32 hit_count;            // Number of times this pattern was executed
+    u8 confidence;            // Pattern confidence (0-255)
+};
+
+alignas(64) HotPathEntry g_hot_path_cache[64];
+u32 g_hot_path_hits = 0;
+u32 g_hot_path_misses = 0;
+
+/// Detect and execute common hot path patterns
+bool ExecuteHotPathPattern(u32 pc, u16* ops, u8 length, Sh4Context* ctx) {
+    if (!g_hot_path_specialization_enabled || length < 2) return false;
+
+    // Pattern 1: mov #imm,Rn + add #imm2,Rn (common in loops)
+    if (length >= 2 && (ops[0] & 0xF000) == 0xE000 && (ops[1] & 0xF000) == 0x7000) {
+        u32 n1 = (ops[0] >> 8) & 0xF;
+        u32 n2 = (ops[1] >> 8) & 0xF;
+        if (n1 == n2) {
+            // Fuse: mov #imm,Rn + add #imm2,Rn -> Rn = imm + imm2
+            s32 imm1 = (s32)(s8)(ops[0] & 0xFF);
+            s32 imm2 = (s32)(s8)(ops[1] & 0xFF);
+            ctx->r[n1] = imm1 + imm2;
+            ctx->pc += 4; // Skip both instructions
+            return true;
+        }
+    }
+
+    // Pattern 2: mov Rm,Rn + mov Rx,Ry (common register shuffling)
+    if (length >= 2 && (ops[0] & 0xF00F) == 0x6003 && (ops[1] & 0xF00F) == 0x6003) {
+        u32 n1 = (ops[0] >> 8) & 0xF, m1 = (ops[0] >> 4) & 0xF;
+        u32 n2 = (ops[1] >> 8) & 0xF, m2 = (ops[1] >> 4) & 0xF;
+        // Execute both moves if they don't conflict
+        if (n1 != m2 && n2 != m1) {
+            ctx->r[n1] = ctx->r[m1];
+            ctx->r[n2] = ctx->r[m2];
+            ctx->pc += 4; // Skip both instructions
+            return true;
+        }
+    }
+
+    // Pattern 3: add #1,Rn + cmp/eq #value,Rn + bt/bf (loop counter pattern)
+    if (length >= 3 && (ops[0] & 0xF000) == 0x7000 && (ops[1] & 0xFF00) == 0x8800 &&
+        ((ops[2] & 0xFF00) == 0x8900 || (ops[2] & 0xFF00) == 0x8B00)) {
+        u32 n1 = (ops[0] >> 8) & 0xF;
+        s32 add_imm = (s32)(s8)(ops[0] & 0xFF);
+        s32 cmp_imm = (s32)(s8)(ops[1] & 0xFF);
+
+        if (add_imm == 1 || add_imm == -1) { // Common loop increments
+            ctx->r[n1] += add_imm;
+            ctx->sr.T = (ctx->r[0] == cmp_imm) ? 1 : 0;
+
+            bool should_branch = ((ops[2] & 0xFF00) == 0x8900) ? (ctx->sr.T != 0) : (ctx->sr.T == 0);
+            if (should_branch) {
+                s32 disp = (s32)(s8)(ops[2] & 0xFF);
+                ctx->pc = ctx->pc + disp * 2;
+            } else {
+                ctx->pc += 6; // Skip all three instructions
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/// Update hot path cache with detected patterns
+void UpdateHotPathCache(u32 pc, u16* ops, u8 length) {
+    if (!g_hot_path_specialization_enabled || length < 2) return;
+
+    u32 cache_index = (pc >> 2) & 63;
+    HotPathEntry* entry = &g_hot_path_cache[cache_index];
+
+    if (entry->pc == pc && entry->pattern_length == length) {
+        bool match = true;
+        for (u8 i = 0; i < length; i++) {
+            if (entry->pattern[i] != ops[i]) {
+                match = false;
+                break;
+            }
+        }
+
+        if (match) {
+            entry->hit_count++;
+            if (entry->confidence < 240) entry->confidence += 16;
+            return;
+        }
+    }
+
+    // New pattern
+    entry->pc = pc;
+    entry->pattern_length = length;
+    for (u8 i = 0; i < length && i < 4; i++) {
+        entry->pattern[i] = ops[i];
+    }
+    entry->hit_count = 1;
+    entry->confidence = 128;
+}
+
+/// Check if hot path pattern exists in cache
+bool CheckHotPathCache(u32 pc, u16* ops, u8 length, Sh4Context* ctx) {
+    if (!g_hot_path_specialization_enabled) return false;
+
+    u32 cache_index = (pc >> 2) & 63;
+    HotPathEntry* entry = &g_hot_path_cache[cache_index];
+
+    if (entry->pc == pc && entry->pattern_length == length && entry->confidence > 128) {
+        bool match = true;
+        for (u8 i = 0; i < length; i++) {
+            if (entry->pattern[i] != ops[i]) {
+                match = false;
+                break;
+            }
+        }
+
+        if (match) {
+            g_hot_path_hits++;
+            return ExecuteHotPathPattern(pc, ops, length, ctx);
+        }
+    }
+
+    g_hot_path_misses++;
+    return false;
+}
+
+/// Reset hot path specialization cache
+static void ResetHotPathSpecializationCache() {
+    std::memset(g_hot_path_cache, 0, sizeof(g_hot_path_cache));
+    g_hot_path_hits = 0;
+    g_hot_path_misses = 0;
+
+    // Initialize all entries as invalid
+    for (int i = 0; i < 64; i++) {
+        g_hot_path_cache[i].pc = 0xFFFFFFFF;
+        g_hot_path_cache[i].confidence = 128;
+    }
+}
+
 /// Check if instruction is a branch
 bool IsBranchInstruction(u16 op) {
     switch (op & 0xF000) {
@@ -656,7 +801,8 @@ void Sh4Interpreter::ExecutePerformanceMegaBatch()
 {
 	const u32 MEGA_BATCH_SIZE = 512;
 
-	for (u32 i = 0; i < MEGA_BATCH_SIZE; i++) {
+	// Loop unrolling for mega batch - process 4 instructions at a time for better ILP
+	for (u32 i = 0; i < MEGA_BATCH_SIZE; i += 4) {
 		if (__builtin_expect((i & 15) == 0 && ctx->cycle_counter <= 0, 0)) {
 			break;
 		}
@@ -669,37 +815,80 @@ void Sh4Interpreter::ExecutePerformanceMegaBatch()
 			}
 		}
 
-		u8 estimated_cycles;
-		u16 op = FetchInstructionOptimized(&estimated_cycles);
+		// Unrolled loop - execute 4 instructions per iteration
+		for (u32 unroll = 0; unroll < 4 && (i + unroll) < MEGA_BATCH_SIZE; unroll++) {
+			u8 estimated_cycles;
+			u16 op = FetchInstructionOptimized(&estimated_cycles);
 
-		if (__builtin_expect(ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint(), 0))
-			throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
+			if (__builtin_expect(ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint(), 0))
+				throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
 
-		// Try instruction fusion if enabled
-		bool fused = false;
-		if (g_instruction_fusion_enabled && i < (MEGA_BATCH_SIZE - 1)) {
-			u32 next_pc = ctx->pc;
-			u16 next_op = FastIReadMem16(next_pc);
+			// Try hot path specialization first for common patterns
+			bool hot_path_executed = false;
+			if (g_hot_path_specialization_enabled && unroll == 0) {
+				// Look ahead to gather 2-4 instructions for pattern matching
+				u16 pattern[4];
+				u8 pattern_length = 0;
+				u32 saved_pc = ctx->pc - 2; // Current instruction PC
 
-			FusedInstructionType fusion_type = CheckFusionCache(ctx->pc - 2, op, next_op);
-			if (fusion_type == FUSED_NONE) {
-				fusion_type = DetectFusionPattern(op, next_op);
-			}
+				pattern[pattern_length++] = op;
 
-			if (fusion_type != FUSED_NONE) {
-				if (ExecuteFusedInstruction(fusion_type, op, next_op, ctx)) {
-					UpdateFusionCache(ctx->pc - 2, op, next_op, fusion_type);
-					ctx->pc += 2; // Skip next instruction since we fused it
-					addCyclesOptimized(estimated_cycles + 1); // Estimate for both instructions
-					fused = true;
-					i++; // Count the fused instruction
+				// Try to fetch more instructions for pattern detection
+				try {
+					for (u8 lookahead = 1; lookahead < 4 && pattern_length < 4; lookahead++) {
+						u32 next_addr = ctx->pc + (lookahead - 1) * 2;
+						u16 next_op = FastIReadMem16(next_addr);
+						pattern[pattern_length++] = next_op;
+					}
+				} catch (...) {
+					// If we can't fetch ahead, just use what we have
+				}
+
+				// Check cache first, then try pattern detection
+				if (CheckHotPathCache(saved_pc, pattern, pattern_length, ctx)) {
+					hot_path_executed = true;
+					addCyclesOptimized(pattern_length); // Estimate cycles for pattern
+				} else if (pattern_length >= 2) {
+					// Try to execute the pattern even if not cached
+					if (ExecuteHotPathPattern(saved_pc, pattern, pattern_length, ctx)) {
+						UpdateHotPathCache(saved_pc, pattern, pattern_length);
+						hot_path_executed = true;
+						addCyclesOptimized(pattern_length);
+					}
 				}
 			}
-		}
 
-		if (!fused) {
-			OpPtr[op](ctx, op);
-			addCyclesOptimized(estimated_cycles);
+			if (hot_path_executed) {
+				// Hot path was executed, skip normal processing for this batch
+				break;
+			}
+
+			// Try instruction fusion if enabled
+			bool fused = false;
+			if (g_instruction_fusion_enabled && (i + unroll) < (MEGA_BATCH_SIZE - 1)) {
+				u32 next_pc = ctx->pc;
+				u16 next_op = FastIReadMem16(next_pc);
+
+				FusedInstructionType fusion_type = CheckFusionCache(ctx->pc - 2, op, next_op);
+				if (fusion_type == FUSED_NONE) {
+					fusion_type = DetectFusionPattern(op, next_op);
+				}
+
+				if (fusion_type != FUSED_NONE) {
+					if (ExecuteFusedInstruction(fusion_type, op, next_op, ctx)) {
+						UpdateFusionCache(ctx->pc - 2, op, next_op, fusion_type);
+						ctx->pc += 2; // Skip next instruction since we fused it
+						addCyclesOptimized(estimated_cycles + 1); // Estimate for both instructions
+						fused = true;
+						unroll++; // Count the fused instruction
+					}
+				}
+			}
+
+			if (!fused) {
+				OpPtr[op](ctx, op);
+				addCyclesOptimized(estimated_cycles);
+			}
 		}
 
 		if ((i & 31) == 31) {
@@ -708,12 +897,13 @@ void Sh4Interpreter::ExecutePerformanceMegaBatch()
 	}
 }
 
-/// Execute optimized batch for hot code paths
+/// Execute optimized batch for hot code paths with loop unrolling
 void Sh4Interpreter::ExecuteHotBatch()
 {
 	const u32 HOT_BATCH_SIZE = 64;
 
-	for (u32 i = 0; i < HOT_BATCH_SIZE && ctx->cycle_counter > 0; i++) {
+	// Loop unrolling for hot batch - process 2 instructions at a time
+	for (u32 i = 0; i < HOT_BATCH_SIZE && ctx->cycle_counter > 0; i += 2) {
 		if ((i & 31) == 31) {
 			u32 cycles_until_aica = (AICA_TICK_INTERVAL - (g_cycles_since_aica_check % AICA_TICK_INTERVAL));
 			if (cycles_until_aica <= AICA_SAFETY_MARGIN) {
@@ -722,14 +912,17 @@ void Sh4Interpreter::ExecuteHotBatch()
 			}
 		}
 
-		u8 estimated_cycles;
-		u16 op = FetchInstructionOptimized(&estimated_cycles);
+		// Unrolled loop - execute 2 instructions per iteration
+		for (u32 unroll = 0; unroll < 2 && (i + unroll) < HOT_BATCH_SIZE && ctx->cycle_counter > 0; unroll++) {
+			u8 estimated_cycles;
+			u16 op = FetchInstructionOptimized(&estimated_cycles);
 
-		if (__builtin_expect(ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint(), 0))
-			throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
+			if (__builtin_expect(ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint(), 0))
+				throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
 
-		OpPtr[op](ctx, op);
-		addCyclesOptimized(estimated_cycles);
+			OpPtr[op](ctx, op);
+			addCyclesOptimized(estimated_cycles);
+		}
 
 		if ((i & 15) == 15) {
 			flushCyclesIfNeeded(this);
@@ -897,6 +1090,10 @@ void Sh4Interpreter::Reset(bool hard)
 	g_instruction_fusion_enabled = true;
 	ResetInstructionFusionCache();
 
+		// Enable hot path specialization by default for better FMV performance
+	g_hot_path_specialization_enabled = true;
+	ResetHotPathSpecializationCache();
+
 	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, simplified cycle mode, branch prediction, and instruction fusion enabled");
 }
 
@@ -978,6 +1175,8 @@ void Sh4Interpreter::ResetCache()
 	ResetBranchPredictionCache();
 	g_instruction_fusion_enabled = true; // Enable instruction fusion by default
 	ResetInstructionFusionCache();
+	g_hot_path_specialization_enabled = true; // Enable hot path specialization by default
+	ResetHotPathSpecializationCache();
 }
 
 void Sh4Interpreter::Init()
@@ -1050,6 +1249,28 @@ void Sh4Interpreter::GetInstructionFusionStats(u32& hits, u32& misses)
 {
 	hits = g_fusion_hits;
 	misses = g_fusion_misses;
+}
+
+/// Toggle hot path specialization for performance testing
+void Sh4Interpreter::SetHotPathSpecializationMode(bool enabled)
+{
+	g_hot_path_specialization_enabled = enabled;
+	if (enabled) {
+		ResetHotPathSpecializationCache();
+	}
+	INFO_LOG(INTERPRETER, "Hot path specialization %s", enabled ? "enabled" : "disabled");
+}
+
+bool Sh4Interpreter::GetHotPathSpecializationMode()
+{
+	return g_hot_path_specialization_enabled;
+}
+
+/// Get hot path specialization statistics
+void Sh4Interpreter::GetHotPathSpecializationStats(u32& hits, u32& misses)
+{
+	hits = g_hot_path_hits;
+	misses = g_hot_path_misses;
 }
 
 Sh4Executor *Get_Sh4Interpreter()

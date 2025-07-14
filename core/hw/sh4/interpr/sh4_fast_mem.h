@@ -83,6 +83,23 @@ FusedInstructionType DetectFusionPattern(u16 op1, u16 op2);
 bool ExecuteFusedInstruction(FusedInstructionType type, u16 op1, u16 op2, Sh4Context* ctx);
 void UpdateFusionCache(u32 pc, u16 op1, u16 op2, FusedInstructionType type);
 
+/// Hot Path Specialization - optimize common instruction sequences
+extern bool g_hot_path_specialization_enabled;
+
+/// Hot path pattern types for common sequences
+enum HotPathPatternType {
+    HOT_PATH_NONE = 0,
+    HOT_PATH_MOV_IMM_ADD_IMM,     // mov #imm,Rn + add #imm2,Rn
+    HOT_PATH_DUAL_MOV,            // mov Rm,Rn + mov Rx,Ry
+    HOT_PATH_LOOP_COUNTER,        // add #1,Rn + cmp/eq #val,Rn + bt/bf
+    HOT_PATH_COUNT
+};
+
+/// Hot path specialization functions
+bool ExecuteHotPathPattern(u32 pc, u16* ops, u8 length, Sh4Context* ctx);
+void UpdateHotPathCache(u32 pc, u16* ops, u8 length);
+bool CheckHotPathCache(u32 pc, u16* ops, u8 length, Sh4Context* ctx);
+
 /// Fast cycle calculation with simple pattern-based estimates
 inline u8 FastCalculateInstructionCycles(u16 op) {
     // Simple pattern-based cycle estimates for common operations

@@ -32,6 +32,11 @@ public:
 	static bool GetInstructionFusionMode();
 	static void GetInstructionFusionStats(u32& hits, u32& misses);
 
+	/// Toggle hot path specialization for performance testing
+	static void SetHotPathSpecializationMode(bool enabled);
+	static bool GetHotPathSpecializationMode();
+	static void GetHotPathSpecializationStats(u32& hits, u32& misses);
+
 	static Sh4Interpreter *Instance;
 
 protected:

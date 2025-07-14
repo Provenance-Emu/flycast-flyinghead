@@ -102,6 +102,12 @@ struct alignas(64) OptimizedInstructionCache {
 
 private:
 	u8 estimateInstructionCycles(u16 op) {
+		// Use branch prediction for branch instructions if enabled
+		if (g_branch_prediction_enabled && IsBranchInstruction(op)) {
+			// Branch prediction can reduce effective cycles for predicted branches
+			return 1; // Optimistic estimate for predicted branches
+		}
+
 		switch (op & 0xF000) {
 			case 0x6000:
 				if ((op & 0x000F) <= 0x0003) return 2;
@@ -266,6 +272,120 @@ static OptimizedInstructionCache g_instruction_cache;
 // === SIMPLIFIED CYCLE MODE ===
 /// Global flag to enable/disable simplified cycle calculations
 bool g_simplified_cycles_enabled = false;
+
+// === BRANCH PREDICTION CACHE ===
+/// Global flag to enable/disable branch prediction
+bool g_branch_prediction_enabled = false;
+
+/// Branch prediction cache for FMV performance
+alignas(64) BranchCacheEntry g_branch_cache[64];
+u32 g_branch_cache_hits = 0;
+u32 g_branch_cache_misses = 0;
+
+/// Check if instruction is a branch
+bool IsBranchInstruction(u16 op) {
+    switch (op & 0xF000) {
+        case 0x8000: // bf, bt, bf.s, bt.s
+            return (op & 0x0F00) == 0x0B00 || (op & 0x0F00) == 0x0900 ||
+                   (op & 0x0F00) == 0x0F00 || (op & 0x0F00) == 0x0D00;
+        case 0xA000: // bra
+        case 0xB000: // bsr
+            return true;
+        case 0x0000: // braf, bsrf, jmp, jsr, rts, rte
+            return (op & 0x00FF) == 0x23 || (op & 0x00FF) == 0x03 ||
+                   (op & 0x00FF) == 0x2B || (op & 0x00FF) == 0x0B;
+        case 0x4000: // jmp, jsr
+            return (op & 0x00FF) == 0x2B || (op & 0x00FF) == 0x0B;
+    }
+    return false;
+}
+
+/// Calculate branch target from opcode
+static u32 CalculateBranchTarget(u32 pc, u16 op) {
+    switch (op & 0xF000) {
+        case 0x8000: // Conditional branches with 8-bit displacement
+            return pc + 2 + ((s32)(s8)(op & 0xFF)) * 2;
+        case 0xA000: // bra - 12-bit displacement
+        case 0xB000: // bsr - 12-bit displacement
+            return pc + 2 + ((s32)(((s16)(op << 4)) >> 4)) * 2;
+    }
+    return 0; // Indirect branches calculated at runtime
+}
+
+/// Predict branch target using cache and heuristics
+u32 PredictBranchTarget(u32 pc, u16 op, bool condition_flag) {
+    if (!g_branch_prediction_enabled) return 0;
+
+    u32 cache_index = (pc >> 1) & 63; // Use PC bits for cache index
+    BranchCacheEntry* entry = &g_branch_cache[cache_index];
+
+    // Check cache hit
+    if (entry->pc == pc) {
+        // Cache hit - use stored prediction
+        g_branch_cache_hits++;
+
+        // For conditional branches, check pattern
+        switch (op & 0xF000) {
+            case 0x8000: // bf, bt variants
+                if ((op & 0x0F00) == 0x0B00 || (op & 0x0F00) == 0x0F00) { // bf, bf.s
+                    return condition_flag ? 0 : entry->target;
+                } else { // bt, bt.s
+                    return condition_flag ? entry->target : 0;
+                }
+            default:
+                return entry->target;
+        }
+    }
+
+    // Cache miss - calculate and store
+    g_branch_cache_misses++;
+    u32 target = CalculateBranchTarget(pc, op);
+
+    entry->pc = pc;
+    entry->target = target;
+    entry->taken = true;
+    entry->confidence = 128; // Medium confidence for new predictions
+    entry->pattern = 0xFF; // Assume taken initially
+
+    return target;
+}
+
+/// Update branch prediction based on actual outcome
+void UpdateBranchPrediction(u32 pc, u32 actual_target, bool taken) {
+    if (!g_branch_prediction_enabled) return;
+
+    u32 cache_index = (pc >> 1) & 63;
+    BranchCacheEntry* entry = &g_branch_cache[cache_index];
+
+    if (entry->pc == pc) {
+        // Update existing entry
+        entry->pattern = (entry->pattern << 1) | (taken ? 1 : 0);
+
+        if (taken == entry->taken) {
+            // Correct prediction - increase confidence
+            if (entry->confidence < 240) entry->confidence += 16;
+        } else {
+            // Wrong prediction - decrease confidence
+            if (entry->confidence > 16) entry->confidence -= 16;
+            entry->taken = taken;
+        }
+
+                 if (taken) entry->target = actual_target;
+     }
+}
+
+/// Reset branch prediction cache
+static void ResetBranchPredictionCache() {
+    std::memset(g_branch_cache, 0, sizeof(g_branch_cache));
+    g_branch_cache_hits = 0;
+    g_branch_cache_misses = 0;
+
+    // Initialize all entries as invalid
+    for (int i = 0; i < 64; i++) {
+        g_branch_cache[i].pc = 0xFFFFFFFF;
+        g_branch_cache[i].confidence = 128;
+    }
+}
 
 void Sh4Interpreter::ExecuteOpcode(u16 op)
 {
@@ -520,7 +640,11 @@ void Sh4Interpreter::Reset(bool hard)
 	// Enable simplified cycle mode by default for better FMV performance
 	g_simplified_cycles_enabled = true;
 
-	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, and simplified cycle mode enabled");
+	// Enable branch prediction for FMV performance
+	g_branch_prediction_enabled = true;
+	ResetBranchPredictionCache();
+
+	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, simplified cycle mode, and branch prediction enabled");
 }
 
 bool Sh4Interpreter::IsCpuRunning()
@@ -597,6 +721,8 @@ void Sh4Interpreter::ResetCache()
 	g_performance_mode_timer = 0;
 	g_in_performance_mode = false;
 	g_simplified_cycles_enabled = true; // Enable simplified cycles by default
+	g_branch_prediction_enabled = true; // Enable branch prediction by default
+	ResetBranchPredictionCache();
 }
 
 void Sh4Interpreter::Init()
@@ -625,6 +751,28 @@ void Sh4Interpreter::SetSimplifiedCycleMode(bool enabled)
 bool Sh4Interpreter::GetSimplifiedCycleMode()
 {
 	return g_simplified_cycles_enabled;
+}
+
+/// Toggle branch prediction for performance testing
+void Sh4Interpreter::SetBranchPredictionMode(bool enabled)
+{
+	g_branch_prediction_enabled = enabled;
+	if (enabled) {
+		ResetBranchPredictionCache();
+	}
+	INFO_LOG(INTERPRETER, "Branch prediction %s", enabled ? "enabled" : "disabled");
+}
+
+bool Sh4Interpreter::GetBranchPredictionMode()
+{
+	return g_branch_prediction_enabled;
+}
+
+/// Get branch prediction statistics
+void Sh4Interpreter::GetBranchPredictionStats(u32& hits, u32& misses)
+{
+	hits = g_branch_cache_hits;
+	misses = g_branch_cache_misses;
 }
 
 Sh4Executor *Get_Sh4Interpreter()

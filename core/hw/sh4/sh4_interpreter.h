@@ -22,6 +22,11 @@ public:
 	static void SetSimplifiedCycleMode(bool enabled);
 	static bool GetSimplifiedCycleMode();
 
+	/// Toggle branch prediction for performance testing
+	static void SetBranchPredictionMode(bool enabled);
+	static bool GetBranchPredictionMode();
+	static void GetBranchPredictionStats(u32& hits, u32& misses);
+
 	static Sh4Interpreter *Instance;
 
 protected:

@@ -27,6 +27,28 @@ static constexpr u8 FAST_WRITE_CYCLES = 2;
 /// Enable/disable with global flag for testing
 extern bool g_simplified_cycles_enabled;
 
+/// Branch prediction - cache recent branch targets for FMV performance
+extern bool g_branch_prediction_enabled;
+
+/// Branch Target Cache Entry
+struct BranchCacheEntry {
+    u32 pc;           // Branch instruction PC
+    u32 target;       // Target address
+    bool taken;       // Last taken state
+    u8 confidence;    // Prediction confidence (0-255)
+    u8 pattern;       // Recent taken pattern (last 8 branches)
+};
+
+/// Fast branch target prediction cache
+extern BranchCacheEntry g_branch_cache[64]; // 64 entries, cache-line aligned
+extern u32 g_branch_cache_hits;
+extern u32 g_branch_cache_misses;
+
+/// Fast branch prediction functions
+u32 PredictBranchTarget(u32 pc, u16 op, bool condition_flag);
+void UpdateBranchPrediction(u32 pc, u32 actual_target, bool taken);
+bool IsBranchInstruction(u16 op);
+
 /// Fast cycle calculation with simple pattern-based estimates
 inline u8 FastCalculateInstructionCycles(u16 op) {
     // Simple pattern-based cycle estimates for common operations

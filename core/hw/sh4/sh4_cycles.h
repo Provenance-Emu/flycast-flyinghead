@@ -63,6 +63,16 @@ public:
 		return sh4_sched_now64() + SH4_TIMESLICE - ctx->cycle_counter;
 	}
 
+	/// Update CPU ratio dynamically based on performance
+	void updateCpuRatio(int newRatio) {
+		cpuRatio = newRatio;
+	}
+
+	/// Get current CPU ratio
+	int getCpuRatio() const {
+		return cpuRatio;
+	}
+
 	int readAccessCycles(u32 addr, u32 size) const {
 		return readExternalAccessCycles(addr, size) * 2 * cpuRatio;
 	}
@@ -78,7 +88,7 @@ private:
 	static int writeExternalAccessCycles(u32 addr, u32 size);
 
 	sh4_eu lastUnit = CO;
-	const int cpuRatio;
+	int cpuRatio; // Made non-const to allow dynamic adjustment
 	int memOps = 0;
 	Sh4Context *ctx = nullptr;
 };

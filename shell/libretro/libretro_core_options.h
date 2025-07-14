@@ -805,6 +805,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "disabled",
    },
    {
+      CORE_OPTION_NAME "_dynamic_cpu_ratio",
+      "Dynamic CPU Ratio (Interpreter)",
+      NULL,
+      "Automatically adjust the interpreter CPU ratio based on performance. When enabled, the CPU ratio increases during slowdowns and decreases when performance is good, maintaining smooth gameplay without manual tweaking.",
+      NULL,
+      "hacks",
+      {
+         { "enabled",  NULL },
+         { "disabled", NULL },
+         { NULL, NULL },
+      },
+      "enabled",
+   },
+   {
       CORE_OPTION_NAME "_dump_textures",
       "Dump Textures",
       NULL,

@@ -470,6 +470,7 @@ extern Option<bool> EmulateFramebuffer;
 extern Option<bool> FixUpscaleBleedingEdge;
 extern Option<bool> CustomGpuDriver;
 extern Option<bool> GpuDrivenRendering;  // GPU-driven rendering for mobile optimization
+extern Option<bool> DynamicCpuRatio;
 #ifdef VIDEO_ROUTING
 extern Option<bool, false> VideoRouting;
 extern Option<bool, false> VideoRoutingScale;

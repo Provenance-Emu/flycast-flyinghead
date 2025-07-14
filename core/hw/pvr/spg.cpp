@@ -8,6 +8,9 @@
 #include "hw/pvr/Renderer_if.h"
 #include "stdclass.h"
 #include <array>
+#include "emulator.h"
+#include "hw/sh4/sh4_interpreter.h"
+#include "cfg/option.h"
 
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
@@ -104,7 +107,7 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 	{
 		prv_cur_scanline = (prv_cur_scanline + 1) % pvr_numscanlines;
 		clc_pvr_scanline -= Line_Cycles;
-		
+
 		if (SPG_VBLANK_INT.vblank_in_interrupt_line_number == prv_cur_scanline)
 		{
 			if (maple_int_pending)
@@ -128,7 +131,7 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 			SPG_STATUS.vsync = 0;
 
 		SPG_STATUS.scanline = prv_cur_scanline;
-		
+
 		switch (SPG_HBLANK_INT.hblank_int_mode)
 		{
 		case 0:
@@ -164,6 +167,64 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 				u64 time_span = now - real_times[cpu_time_idx];
 				float cpu_speed = ((float)cycle_span / time_span) / (SH4_MAIN_CLOCK / 100000);
 				SH4FastEnough = cpu_speed >= 85.f;
+				static int perf_log_counter = 0;
+				if (++perf_log_counter % 60 == 0) { // Log every 60 frames
+					INFO_LOG(INTERPRETER, "Performance: CPU speed %.1f%%, cycle_span=%u, time_span=%llu",
+						cpu_speed, cycle_span, time_span);
+				}
+
+								/// Dynamic CPU Ratio Adjustment for Interpreter Performance
+				if (config::DynamicCpuRatio) {
+				#if FEAT_SHREC == DYNAREC_NONE
+					// Always use dynamic adjustment when only interpreter is available
+					if (auto* interpreter = dynamic_cast<Sh4Interpreter*>(emu.getSh4Executor())) {
+				#else
+					// Use dynamic adjustment only when interpreter is active
+					if (!config::DynarecEnabled && auto* interpreter = dynamic_cast<Sh4Interpreter*>(emu.getSh4Executor())) {
+				#endif
+					static int adjustment_counter = 0;
+					static bool first_log = true;
+					if (first_log) {
+						INFO_LOG(INTERPRETER, "Dynamic CPU ratio system is ACTIVE");
+						first_log = false;
+					}
+					adjustment_counter++;
+
+					// Adjust every 4 frames to avoid oscillation
+					if (adjustment_counter >= 4) {
+						adjustment_counter = 0;
+						int current_ratio = interpreter->sh4cycles.getCpuRatio();
+						int new_ratio = current_ratio;
+
+						static int first_ratio_log = 0;
+						if (first_ratio_log++ < 3) {
+							INFO_LOG(INTERPRETER, "Initial CPU ratio check: current_ratio=%d, cpu_speed=%.1f%%",
+								current_ratio, cpu_speed);
+						}
+
+						if (cpu_speed < 75.f) {
+							// Very slow, increase ratio significantly
+							new_ratio = std::min(current_ratio + 2, 16);
+						}
+						else if (cpu_speed < 85.f) {
+							// Slow, increase ratio gradually
+							new_ratio = std::min(current_ratio + 1, 16);
+						}
+						else if (cpu_speed >= 95.f && current_ratio > 1) {
+							// Fast enough, can decrease ratio for better accuracy
+							new_ratio = std::max(current_ratio - 1, 1);
+						}
+
+						if (new_ratio != current_ratio) {
+							interpreter->sh4cycles.updateCpuRatio(new_ratio);
+							INFO_LOG(INTERPRETER, "Dynamic CPU ratio adjusted: %d -> %d (CPU speed: %.1f%%)",
+								current_ratio, new_ratio, cpu_speed);
+						} else {
+							DEBUG_LOG(INTERPRETER, "Dynamic CPU ratio check: current=%d, speed=%.1f%%", current_ratio, cpu_speed);
+						}
+					}
+					}
+				}
 			}
 			else {
 				SH4FastEnough = false;
@@ -215,7 +276,7 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 					mspdf, spd_cpu * 100 / 200, spd_vbs,
 					spd_vbs / full_rps, mode, res, fullvbs,
 					spd_fps, fskip / ts);
-				
+
 				fskip = 0;
 				last_fps = getTimeMs();
 			}

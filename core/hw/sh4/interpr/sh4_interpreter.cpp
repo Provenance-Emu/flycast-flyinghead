@@ -361,7 +361,7 @@ void Sh4Interpreter::Run()
 			} catch (const SH4ThrownException& ex) {
 				forceFlushCycles(this);
 				Do_Exception(ex.epc, ex.expEvn);
-				addCyclesOptimized(5 * CPU_RATIO);
+				addCyclesOptimized(5 * sh4cycles.getCpuRatio());
 				forceFlushCycles(this);
 			}
 		} while (__builtin_expect(ctx->CpuRunning, 1));
@@ -403,7 +403,7 @@ void Sh4Interpreter::Step()
 	} catch (const SH4ThrownException& ex) {
 		forceFlushCycles(this);
 		Do_Exception(ex.epc, ex.expEvn);
-		addCyclesOptimized(5 * CPU_RATIO);
+		addCyclesOptimized(5 * sh4cycles.getCpuRatio());
 		forceFlushCycles(this);
 	} catch (const debugger::Stop&) {
 		forceFlushCycles(this);

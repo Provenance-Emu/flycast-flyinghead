@@ -153,5 +153,6 @@ std::array<std::array<Option<MapleDeviceType>, 2>, 4> MapleExpansionDevices {
 config::Option<bool> ForceWinCE(CORE_OPTION_NAME "_force_wince", false);
 config::Option<bool> MapleExpansion(CORE_OPTION_NAME "_maple_expansion", false);
 config::Option<bool> GpuDrivenRendering(CORE_OPTION_NAME "_gpu_driven_rendering", true);  // GPU-driven rendering for mobile
+config::Option<bool> DynamicCpuRatio(CORE_OPTION_NAME "_dynamic_cpu_ratio", true);
 
 } // namespace config

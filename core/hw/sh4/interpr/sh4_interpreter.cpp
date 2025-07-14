@@ -204,6 +204,61 @@ static inline bool isInPerformanceMode(u32 current_pc) {
 	}
 }
 
+// === FAST MEMORY ACCESS FOR INTERPRETER ===
+/// Bypass expensive memory access cycle calculations
+/// These use simplified cycle estimates instead of complex area-based calculations
+
+/// Fast memory access functions with simplified cycle accounting
+u8 FastReadMem8_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2; // Simple estimate
+	return ReadMem8(addr);
+}
+
+u16 FastReadMem16_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	return ReadMem16(addr);
+}
+
+u32 FastReadMem32_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	return ReadMem32(addr);
+}
+
+u64 FastReadMem64_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 3; // Slightly higher for 64-bit
+	return ReadMem64(addr);
+}
+
+void FastWriteMem8_Interp(u32 addr, u8 data) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	WriteMem8(addr, data);
+}
+
+void FastWriteMem16_Interp(u32 addr, u16 data) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	WriteMem16(addr, data);
+}
+
+void FastWriteMem32_Interp(u32 addr, u32 data) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	WriteMem32(addr, data);
+}
+
+void FastWriteMem64_Interp(u32 addr, u64 data) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 3;
+	WriteMem64(addr, data);
+}
+
+s32 FastReadMemS8_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	return (s32)(s8)ReadMem8(addr);
+}
+
+s32 FastReadMemS16_Interp(u32 addr) {
+	Sh4Interpreter::Instance->getContext()->cycle_counter -= 2;
+	return (s32)(s16)ReadMem16(addr);
+}
+
 // Global cache instance
 static OptimizedInstructionCache g_instruction_cache;
 

@@ -11,27 +11,28 @@
 #include "debug/gdb_server.h"
 #include "hw/sh4/dyna/decoder.h"
 #include "emulator.h"
+#include "sh4_fast_mem.h"
 
 #ifdef STRICT_MODE
 #include "hw/sh4/sh4_cache.h"
 #endif
 
-//Read Mem macros
+//Read Mem macros - Fast interpreter versions with simplified cycle accounting
 
-#define ReadMemU32(to,addr) to=ReadMem32(addr)
-#define ReadMemS32(to,addr) to=(s32)ReadMem32(addr)
-#define ReadMemS16(to,addr) to=(u32)(s32)(s16)ReadMem16(addr)
-#define ReadMemS8(to,addr)  to=(u32)(s32)(s8)ReadMem8(addr)
+#define ReadMemU32(to,addr) FAST_READ_MEM_U32(to,addr)
+#define ReadMemS32(to,addr) FAST_READ_MEM_S32(to,addr)
+#define ReadMemS16(to,addr) FAST_READ_MEM_S16(to,addr)
+#define ReadMemS8(to,addr)  FAST_READ_MEM_S8(to,addr)
 
 //Base,offset format
 #define ReadMemBOU32(to,addr,offset)    ReadMemU32(to,addr+offset)
 #define ReadMemBOS16(to,addr,offset)    ReadMemS16(to,addr+offset)
 #define ReadMemBOS8(to,addr,offset)     ReadMemS8(to,addr+offset)
 
-//Write Mem Macros
-#define WriteMemU32(addr,data)          WriteMem32(addr,(u32)data)
-#define WriteMemU16(addr,data)          WriteMem16(addr,(u16)data)
-#define WriteMemU8(addr,data)           WriteMem8(addr,(u8)data)
+//Write Mem Macros - Fast interpreter versions with simplified cycle accounting
+#define WriteMemU32(addr,data)          FAST_WRITE_MEM_U32(addr,data)
+#define WriteMemU16(addr,data)          FAST_WRITE_MEM_U16(addr,data)
+#define WriteMemU8(addr,data)           FAST_WRITE_MEM_U8(addr,data)
 
 //Base,offset format
 #define WriteMemBOU32(addr,offset,data) WriteMemU32(addr+offset,data)
@@ -224,7 +225,7 @@ sh4op(i0010_nnnn_mmmm_0100)
 {
 	u32 n = GetN(op);
 	u32 m = GetM(op);
-	
+
 	u32 addr = ctx->r[n] - 1;
 	WriteMemBOU8(ctx->r[n], (u32)-1, ctx->r[m]);
 	ctx->r[n] = addr;
@@ -279,7 +280,7 @@ sh4op(i0100_nnnn_0000_0010)
 sh4op(i0100_nnnn_0001_0010)
 {
 	u32 n = GetN(op);
-	
+
 	u32 addr = ctx->r[n] - 4;
 	WriteMemU32(addr, ctx->mac.l);
 	ctx->r[n] = addr;
@@ -310,7 +311,7 @@ sh4op(i0100_nnnn_1111_0010)
 sh4op(i0100_nnnn_0001_0011)
 {
 	u32 n = GetN(op);
-	
+
 	u32 addr = ctx->r[n] - 4;
 	WriteMemU32(addr, ctx->gbr);
 	ctx->r[n] = addr;
@@ -816,9 +817,9 @@ sh4op(i0000_nnnn_0000_0011)
 	u32 n = GetN(op);
 	u32 newpc = ctx->r[n] + ctx->pc +2;
 	u32 newpr = ctx->pc + 2;
-	
+
 	executeDelaySlot(); //WARN : pr and r[n] can change here
-	
+
 	ctx->pr = newpr;
 	ctx->pc = newpc;
 	debugger::subroutineCall();
@@ -1927,4 +1928,3 @@ sh4op(iNotImplemented)
 
 	throw SH4ThrownException(ctx->pc - 2, Sh4Ex_IllegalInstr);
 }
-

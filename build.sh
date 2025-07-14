@@ -10,7 +10,12 @@ IOS_MIN_VERSION="15.0"
 IOS="ON"
 SYSTEM_NAME="iOS"
 RUN_BUILD="ON"
-AGGRESSIVE_FLAGS="ON"
+
+# Enable aggressive optimizations
+if [ "$BUILD_TYPE" = "Release" ]; then
+    AGGRESSIVE_FLAGS="ON"
+fi
+
 # Dynarec type: "jitless" (default), "jit", or "none"
 DYNAREC_TYPE=${DYNAREC_TYPE:-"jitless"}
 

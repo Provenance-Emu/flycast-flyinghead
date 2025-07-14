@@ -49,6 +49,40 @@ u32 PredictBranchTarget(u32 pc, u16 op, bool condition_flag);
 void UpdateBranchPrediction(u32 pc, u32 actual_target, bool taken);
 bool IsBranchInstruction(u16 op);
 
+/// Instruction Fusion - execute common 2-instruction patterns as single operations
+extern bool g_instruction_fusion_enabled;
+
+/// Fused instruction types for common FMV patterns
+enum FusedInstructionType {
+    FUSED_NONE = 0,
+    FUSED_MOV_ADD_IMM,      // mov Rm,Rn + add #imm,Rn
+    FUSED_LOAD_ADD,         // mov.l @Rm,Rn + add Rx,Rn
+    FUSED_LOAD_SUB,         // mov.l @Rm,Rn + sub Rx,Rn
+    FUSED_ADD_STORE,        // add Rm,Rn + mov.l Rn,@Rx
+    FUSED_SUB_STORE,        // sub Rm,Rn + mov.l Rn,@Rx
+    FUSED_CMP_BRANCH,       // cmp/eq Rm,Rn + bt/bf target
+    FUSED_SHIFT_ADD,        // shll2/shll8 Rn + add Rm,Rn
+    FUSED_SHIFT_SUB,        // shll2/shll8 Rn + sub Rm,Rn
+    FUSED_COUNT
+};
+
+/// Instruction fusion cache for pattern detection
+struct FusionCacheEntry {
+    u32 pc1;                // First instruction PC
+    u16 op1, op2;          // Instruction pair
+    FusedInstructionType type; // Fusion type
+    u8 confidence;         // Fusion confidence (0-255)
+    u32 hit_count;         // Number of times this pattern executed
+};
+
+extern FusionCacheEntry g_fusion_cache[32]; // Small cache for hot patterns
+extern u32 g_fusion_hits, g_fusion_misses;
+
+/// Instruction fusion functions
+FusedInstructionType DetectFusionPattern(u16 op1, u16 op2);
+bool ExecuteFusedInstruction(FusedInstructionType type, u16 op1, u16 op2, Sh4Context* ctx);
+void UpdateFusionCache(u32 pc, u16 op1, u16 op2, FusedInstructionType type);
+
 /// Fast cycle calculation with simple pattern-based estimates
 inline u8 FastCalculateInstructionCycles(u16 op) {
     // Simple pattern-based cycle estimates for common operations

@@ -282,6 +282,15 @@ alignas(64) BranchCacheEntry g_branch_cache[64];
 u32 g_branch_cache_hits = 0;
 u32 g_branch_cache_misses = 0;
 
+// === INSTRUCTION FUSION ===
+/// Global flag to enable/disable instruction fusion
+bool g_instruction_fusion_enabled = false;
+
+/// Instruction fusion cache for common patterns
+alignas(64) FusionCacheEntry g_fusion_cache[32];
+u32 g_fusion_hits = 0;
+u32 g_fusion_misses = 0;
+
 /// Check if instruction is a branch
 bool IsBranchInstruction(u16 op) {
     switch (op & 0xF000) {
@@ -374,6 +383,222 @@ void UpdateBranchPrediction(u32 pc, u32 actual_target, bool taken) {
      }
 }
 
+/// Detect if two consecutive instructions can be fused
+FusedInstructionType DetectFusionPattern(u16 op1, u16 op2) {
+    if (!g_instruction_fusion_enabled) return FUSED_NONE;
+
+    // Helper macros for instruction pattern matching
+    #define GetN(op) ((op >> 8) & 0xF)
+    #define GetM(op) ((op >> 4) & 0xF)
+    #define GetImm8(op) (op & 0xFF)
+
+    // Pattern 1: mov Rm,Rn + add #imm,Rn
+    if ((op1 & 0xF00F) == 0x6003 && (op2 & 0xF000) == 0x7000) {
+        if (GetN(op1) == GetN(op2)) {
+            return FUSED_MOV_ADD_IMM;
+        }
+    }
+
+    // Pattern 2: mov.l @Rm,Rn + add Rx,Rn
+    if ((op1 & 0xF00F) == 0x6002 && (op2 & 0xF00F) == 0x300C) {
+        if (GetN(op1) == GetN(op2)) {
+            return FUSED_LOAD_ADD;
+        }
+    }
+
+    // Pattern 3: mov.l @Rm,Rn + sub Rx,Rn
+    if ((op1 & 0xF00F) == 0x6002 && (op2 & 0xF00F) == 0x3008) {
+        if (GetN(op1) == GetN(op2)) {
+            return FUSED_LOAD_SUB;
+        }
+    }
+
+    // Pattern 4: add Rm,Rn + mov.l Rn,@Rx
+    if ((op1 & 0xF00F) == 0x300C && (op2 & 0xF00F) == 0x2002) {
+        if (GetN(op1) == GetM(op2)) {
+            return FUSED_ADD_STORE;
+        }
+    }
+
+    // Pattern 5: sub Rm,Rn + mov.l Rn,@Rx
+    if ((op1 & 0xF00F) == 0x3008 && (op2 & 0xF00F) == 0x2002) {
+        if (GetN(op1) == GetM(op2)) {
+            return FUSED_SUB_STORE;
+        }
+    }
+
+    // Pattern 6: cmp/eq Rm,Rn + bt/bf target
+    if ((op1 & 0xF00F) == 0x3000 &&
+        ((op2 & 0xFF00) == 0x8900 || (op2 & 0xFF00) == 0x8B00)) {
+        return FUSED_CMP_BRANCH;
+    }
+
+    // Pattern 7: shll2 Rn + add Rm,Rn
+    if ((op1 & 0xF0FF) == 0x4008 && (op2 & 0xF00F) == 0x300C) {
+        if (GetN(op1) == GetN(op2)) {
+            return FUSED_SHIFT_ADD;
+        }
+    }
+
+    // Pattern 8: shll8 Rn + add Rm,Rn
+    if ((op1 & 0xF0FF) == 0x4018 && (op2 & 0xF00F) == 0x300C) {
+        if (GetN(op1) == GetN(op2)) {
+            return FUSED_SHIFT_ADD;
+        }
+    }
+
+    #undef GetN
+    #undef GetM
+    #undef GetImm8
+
+    return FUSED_NONE;
+}
+
+/// Execute fused instruction pattern
+bool ExecuteFusedInstruction(FusedInstructionType type, u16 op1, u16 op2, Sh4Context* ctx) {
+    #define GetN(op) ((op >> 8) & 0xF)
+    #define GetM(op) ((op >> 4) & 0xF)
+    #define GetImm8(op) (op & 0xFF)
+    #define GetSImm8(op) ((s32)(s8)(op & 0xFF))
+
+    switch (type) {
+        case FUSED_MOV_ADD_IMM: {
+            // mov Rm,Rn + add #imm,Rn -> Rn = Rm + imm
+            u32 m = GetM(op1);
+            u32 n = GetN(op1);
+            s32 imm = GetSImm8(op2);
+            ctx->r[n] = ctx->r[m] + imm;
+            return true;
+        }
+
+        case FUSED_LOAD_ADD: {
+            // mov.l @Rm,Rn + add Rx,Rn -> Rn = *(u32*)Rm + Rx
+            u32 m1 = GetM(op1), n = GetN(op1);
+            u32 x = GetM(op2);
+            ctx->r[n] = FastReadMem32_Interp(ctx->r[m1]) + ctx->r[x];
+            return true;
+        }
+
+        case FUSED_LOAD_SUB: {
+            // mov.l @Rm,Rn + sub Rx,Rn -> Rn = *(u32*)Rm - Rx
+            u32 m1 = GetM(op1), n = GetN(op1);
+            u32 x = GetM(op2);
+            ctx->r[n] = FastReadMem32_Interp(ctx->r[m1]) - ctx->r[x];
+            return true;
+        }
+
+        case FUSED_ADD_STORE: {
+            // add Rm,Rn + mov.l Rn,@Rx -> Rn += Rm; *(u32*)Rx = Rn
+            u32 m = GetM(op1), n = GetN(op1);
+            u32 x = GetN(op2);
+            ctx->r[n] += ctx->r[m];
+            FastWriteMem32_Interp(ctx->r[x], ctx->r[n]);
+            return true;
+        }
+
+        case FUSED_SUB_STORE: {
+            // sub Rm,Rn + mov.l Rn,@Rx -> Rn -= Rm; *(u32*)Rx = Rn
+            u32 m = GetM(op1), n = GetN(op1);
+            u32 x = GetN(op2);
+            ctx->r[n] -= ctx->r[m];
+            FastWriteMem32_Interp(ctx->r[x], ctx->r[n]);
+            return true;
+        }
+
+        case FUSED_CMP_BRANCH: {
+            // cmp/eq Rm,Rn + bt/bf target -> compare and branch in one operation
+            u32 m = GetM(op1), n = GetN(op1);
+            bool equal = (ctx->r[m] == ctx->r[n]);
+            ctx->sr.T = equal ? 1 : 0;
+
+            // Handle branch
+            if ((op2 & 0xFF00) == 0x8900) { // bt
+                if (equal) {
+                    s32 disp = GetSImm8(op2);
+                    ctx->pc = ctx->pc + disp * 2;
+                }
+            } else { // bf
+                if (!equal) {
+                    s32 disp = GetSImm8(op2);
+                    ctx->pc = ctx->pc + disp * 2;
+                }
+            }
+            return true;
+        }
+
+        case FUSED_SHIFT_ADD: {
+            // shll2/shll8 Rn + add Rm,Rn -> Rn = (Rn << shift) + Rm
+            u32 n = GetN(op1);
+            u32 m = GetM(op2);
+            if ((op1 & 0xF0FF) == 0x4008) { // shll2
+                ctx->r[n] = (ctx->r[n] << 2) + ctx->r[m];
+            } else { // shll8
+                ctx->r[n] = (ctx->r[n] << 8) + ctx->r[m];
+            }
+            return true;
+        }
+
+        default:
+            return false;
+    }
+
+    #undef GetN
+    #undef GetM
+    #undef GetImm8
+    #undef GetSImm8
+}
+
+/// Update instruction fusion cache
+void UpdateFusionCache(u32 pc, u16 op1, u16 op2, FusedInstructionType type) {
+    if (!g_instruction_fusion_enabled || type == FUSED_NONE) return;
+
+    u32 cache_index = (pc >> 2) & 31; // Use PC bits for cache index
+    FusionCacheEntry* entry = &g_fusion_cache[cache_index];
+
+    if (entry->pc1 == pc && entry->op1 == op1 && entry->op2 == op2) {
+        // Cache hit - update stats
+        entry->hit_count++;
+        if (entry->confidence < 240) entry->confidence += 16;
+    } else {
+        // Cache miss - new entry
+        entry->pc1 = pc;
+        entry->op1 = op1;
+        entry->op2 = op2;
+        entry->type = type;
+        entry->confidence = 128;
+        entry->hit_count = 1;
+    }
+}
+
+/// Check if instruction fusion is available for PC
+static FusedInstructionType CheckFusionCache(u32 pc, u16 op1, u16 op2) {
+    if (!g_instruction_fusion_enabled) return FUSED_NONE;
+
+    u32 cache_index = (pc >> 2) & 31;
+    FusionCacheEntry* entry = &g_fusion_cache[cache_index];
+
+    if (entry->pc1 == pc && entry->op1 == op1 && entry->op2 == op2 && entry->confidence > 64) {
+        g_fusion_hits++;
+        return entry->type;
+    }
+
+    g_fusion_misses++;
+    return FUSED_NONE;
+}
+
+/// Reset instruction fusion cache
+static void ResetInstructionFusionCache() {
+    std::memset(g_fusion_cache, 0, sizeof(g_fusion_cache));
+    g_fusion_hits = 0;
+    g_fusion_misses = 0;
+
+    // Initialize all entries as invalid
+    for (int i = 0; i < 32; i++) {
+        g_fusion_cache[i].pc1 = 0xFFFFFFFF;
+        g_fusion_cache[i].confidence = 128;
+    }
+}
+
 /// Reset branch prediction cache
 static void ResetBranchPredictionCache() {
     std::memset(g_branch_cache, 0, sizeof(g_branch_cache));
@@ -450,8 +675,32 @@ void Sh4Interpreter::ExecutePerformanceMegaBatch()
 		if (__builtin_expect(ctx->sr.FD == 1 && OpDesc[op]->IsFloatingPoint(), 0))
 			throw SH4ThrownException(ctx->pc - 2, Sh4Ex_FpuDisabled);
 
-		OpPtr[op](ctx, op);
-		addCyclesOptimized(estimated_cycles);
+		// Try instruction fusion if enabled
+		bool fused = false;
+		if (g_instruction_fusion_enabled && i < (MEGA_BATCH_SIZE - 1)) {
+			u32 next_pc = ctx->pc;
+			u16 next_op = FastIReadMem16(next_pc);
+
+			FusedInstructionType fusion_type = CheckFusionCache(ctx->pc - 2, op, next_op);
+			if (fusion_type == FUSED_NONE) {
+				fusion_type = DetectFusionPattern(op, next_op);
+			}
+
+			if (fusion_type != FUSED_NONE) {
+				if (ExecuteFusedInstruction(fusion_type, op, next_op, ctx)) {
+					UpdateFusionCache(ctx->pc - 2, op, next_op, fusion_type);
+					ctx->pc += 2; // Skip next instruction since we fused it
+					addCyclesOptimized(estimated_cycles + 1); // Estimate for both instructions
+					fused = true;
+					i++; // Count the fused instruction
+				}
+			}
+		}
+
+		if (!fused) {
+			OpPtr[op](ctx, op);
+			addCyclesOptimized(estimated_cycles);
+		}
 
 		if ((i & 31) == 31) {
 			flushCyclesIfNeeded(this);
@@ -637,14 +886,18 @@ void Sh4Interpreter::Reset(bool hard)
 	g_performance_mode_timer = 0;
 	g_in_performance_mode = false;
 
-	// Enable simplified cycle mode by default for better FMV performance
+		// Enable simplified cycle mode by default for better FMV performance
 	g_simplified_cycles_enabled = true;
 
 	// Enable branch prediction for FMV performance
 	g_branch_prediction_enabled = true;
 	ResetBranchPredictionCache();
 
-	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, simplified cycle mode, and branch prediction enabled");
+	// Enable instruction fusion for FMV performance
+	g_instruction_fusion_enabled = true;
+	ResetInstructionFusionCache();
+
+	INFO_LOG(INTERPRETER, "Optimized SH4 Interpreter - Advanced instruction caching, adaptive execution, simplified cycle mode, branch prediction, and instruction fusion enabled");
 }
 
 bool Sh4Interpreter::IsCpuRunning()
@@ -723,6 +976,8 @@ void Sh4Interpreter::ResetCache()
 	g_simplified_cycles_enabled = true; // Enable simplified cycles by default
 	g_branch_prediction_enabled = true; // Enable branch prediction by default
 	ResetBranchPredictionCache();
+	g_instruction_fusion_enabled = true; // Enable instruction fusion by default
+	ResetInstructionFusionCache();
 }
 
 void Sh4Interpreter::Init()
@@ -773,6 +1028,28 @@ void Sh4Interpreter::GetBranchPredictionStats(u32& hits, u32& misses)
 {
 	hits = g_branch_cache_hits;
 	misses = g_branch_cache_misses;
+}
+
+/// Toggle instruction fusion for performance testing
+void Sh4Interpreter::SetInstructionFusionMode(bool enabled)
+{
+	g_instruction_fusion_enabled = enabled;
+	if (enabled) {
+		ResetInstructionFusionCache();
+	}
+	INFO_LOG(INTERPRETER, "Instruction fusion %s", enabled ? "enabled" : "disabled");
+}
+
+bool Sh4Interpreter::GetInstructionFusionMode()
+{
+	return g_instruction_fusion_enabled;
+}
+
+/// Get instruction fusion statistics
+void Sh4Interpreter::GetInstructionFusionStats(u32& hits, u32& misses)
+{
+	hits = g_fusion_hits;
+	misses = g_fusion_misses;
 }
 
 Sh4Executor *Get_Sh4Interpreter()

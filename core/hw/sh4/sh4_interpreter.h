@@ -27,6 +27,11 @@ public:
 	static bool GetBranchPredictionMode();
 	static void GetBranchPredictionStats(u32& hits, u32& misses);
 
+	/// Toggle instruction fusion for performance testing
+	static void SetInstructionFusionMode(bool enabled);
+	static bool GetInstructionFusionMode();
+	static void GetInstructionFusionStats(u32& hits, u32& misses);
+
 	static Sh4Interpreter *Instance;
 
 protected:

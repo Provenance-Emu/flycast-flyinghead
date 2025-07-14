@@ -72,6 +72,10 @@ struct alignas(64) OptimizedInstructionCache {
 	u16 fetch(u32 addr, u8* cycles_out) {
 		u32 index = (addr >> 1) & ICACHE_MASK;
 
+		// Prefetch next cache lines for A10's aggressive prefetcher
+		__builtin_prefetch(&pc[(index + 8) & ICACHE_MASK], 0, 3);
+		__builtin_prefetch(&opcode[(index + 8) & ICACHE_MASK], 0, 3);
+
 		if (__builtin_expect(pc[index] == addr, 1)) {
 			access_count[index]++;
 			*cycles_out = estimated_cycles[index];

@@ -15,6 +15,8 @@
 #include "debug/gdb_server.h"
 #include "../sh4_cycles.h"
 #include "build.h"
+#include "hw/sh4/modules/mmu.h"
+#include "hw/mem/addrspace.h"
 
 #include <array>
 #include <algorithm>
@@ -22,6 +24,31 @@
 Sh4ICache icache;
 Sh4OCache ocache;
 Sh4Interpreter *Sh4Interpreter::Instance;
+
+/// Fast instruction fetch using the fast MMU path when available
+static inline u16 FastIReadMem16(u32 vaddr)
+{
+	if (vaddr & 1)
+		// Alignment check
+		mmu_raise_exception(MmuError::BADADDR, vaddr, MMU_TT_IREAD);
+
+	if (!mmu_enabled()) {
+		// No MMU, direct read
+		return addrspace::read16(vaddr);
+	}
+
+#ifdef FAST_MMU
+	// Fast MMU path - inline optimization
+	u32 paddr;
+	MmuError rv = mmu_instruction_translation(vaddr, paddr);
+	if (rv != MmuError::NONE)
+		mmu_raise_exception(rv, vaddr, MMU_TT_IREAD);
+	return addrspace::read16(paddr);
+#else
+	// Fall back to the slow path for non-fast MMU builds
+	return mmu_IReadMem16(vaddr);
+#endif
+}
 
 // === OPTIMIZED INSTRUCTION CACHE ===
 #define ICACHE_SIZE 512
@@ -51,7 +78,7 @@ struct alignas(64) OptimizedInstructionCache {
 			return opcode[index];
 		}
 
-		u16 op = IReadMem16(addr);
+		u16 op = FastIReadMem16(addr);
 		pc[index] = addr;
 		opcode[index] = op;
 		access_count[index] = 1;
@@ -191,7 +218,7 @@ u16 Sh4Interpreter::ReadNexOp()
 		throw SH4ThrownException(addr, Sh4Ex_AddressErrorRead);
 
 	ctx->pc = addr + 2;
-	return IReadMem16(addr);
+	return FastIReadMem16(addr);
 }
 
 /// Optimized instruction fetching with caching
